@@ -77,6 +77,77 @@ def test_release_tag_picker_uses_semver_precedence(tmp_path):
         '"v2026.4.8","v2026.4.13"]'
     )
 
+    result = subprocess.run(
+        [
+            str(script),
+            "--repo",
+            str(repo),
+            "--count",
+            "5",
+            "--exclude-tag",
+            "v0.21.0-rc.2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == (
+        '["v0.21.0-rc.1","v0.21.0","v2026.4.8","v2026.4.13"]'
+    )
+
+    first_release_repo = tmp_path / "first-release"
+    first_release_repo.mkdir()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(first_release_repo)], check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(first_release_repo),
+            "config",
+            "user.email",
+            "test@example.invalid",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(first_release_repo), "config", "user.name", "test"],
+        check=True,
+    )
+    (first_release_repo / "file").write_text("x")
+    subprocess.run(
+        ["git", "-C", str(first_release_repo), "add", "file"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(first_release_repo), "commit", "-qm", "initial"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(first_release_repo), "tag", "v0.21.0-rc.1"],
+        check=True,
+    )
+    result = subprocess.run(
+        [
+            str(script),
+            "--repo",
+            str(first_release_repo),
+            "--exclude-tag",
+            "v0.21.0-rc.1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "[]"
+
+
+def test_tag_trigger_excludes_the_current_release_from_update_sources():
+    workflow = (REPO_ROOT / ".github/workflows/install-e2e.yml").read_text()
+
+    assert '[[ "$GITHUB_REF_TYPE" == "tag" ]]' in workflow
+    assert 'picker_args+=(--exclude-tag "$GITHUB_REF_NAME")' in workflow
+
 
 def test_workflow_doctor_policy_is_strict_and_secret_free():
     workflow = (REPO_ROOT / ".github/workflows/install-e2e.yml").read_text()

@@ -13,11 +13,14 @@
 # between (config-schema bumps, venv layout changes, dependency floors).
 #
 # Usage:
-#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR]
+#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR] [--exclude-tag TAG]
 #
 #   --count   how many tags to emit (default 5, minimum 1). Fewer tags than
 #             requested emits all of them.
 #   --repo    repository to read tags from (default: this checkout).
+#   --exclude-tag
+#             omit one release tag before sampling (for example, the tag that
+#             triggered a release workflow).
 #
 # Reads tags from the local checkout, so it needs one fetched with tags
 # (actions/checkout with fetch-depth: 0, or `fetch-tags: true`). A shallow
@@ -30,6 +33,7 @@
 set -euo pipefail
 
 COUNT=5
+EXCLUDE_TAG=""
 # Default to the repository containing this script, resolved through its real
 # path so a symlinked or copied script still reads the checkout it lives in
 # rather than whatever repo the caller happens to be standing in.
@@ -42,6 +46,9 @@ while [ "$#" -gt 0 ]; do
     --repo)
       [ "$#" -ge 2 ] || { echo 'error: --repo needs a value' >&2; exit 1; }
       REPO="$2"; shift 2 ;;
+    --exclude-tag)
+      [ "$#" -ge 2 ] || { echo 'error: --exclude-tag needs a value' >&2; exit 1; }
+      EXCLUDE_TAG="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -70,6 +77,7 @@ fi
 # non-numeric identifiers.
 mapfile -t tags < <(
   git -C "$REPO" tag --list 'v*' |
+    { if [ -n "$EXCLUDE_TAG" ]; then grep -Fvx -- "$EXCLUDE_TAG" || true; else cat; fi; } |
     python3 -c '
 import re
 import sys
@@ -102,9 +110,16 @@ print("\n".join(
 ))
 '
 )
+if [ "${#tags[@]}" -eq 1 ] && [ -z "${tags[0]}" ]; then
+  tags=()
+fi
 
 total="${#tags[@]}"
 if [ "$total" -eq 0 ]; then
+  if [ -n "$EXCLUDE_TAG" ]; then
+    printf '[]\n'
+    exit 0
+  fi
   echo "error: no release tags found in $REPO" >&2
   echo '       A shallow clone has no tags: fetch with tags (actions/checkout' >&2
   echo '       with fetch-depth: 0, or fetch-tags: true).' >&2

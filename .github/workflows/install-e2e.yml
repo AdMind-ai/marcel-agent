@@ -94,9 +94,18 @@ jobs:
             echo 'has-releases=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          picker_args=(--count '${{ inputs.tag-count || 5 }}')
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            picker_args+=(--exclude-tag "$GITHUB_REF_NAME")
+          fi
+          tags="$(scripts/sandbox/pick-release-tags.sh "${picker_args[@]}")"
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          if [[ "$tags" == "[]" ]]; then
+            echo "No prior Marcel release tags exist; historical update E2E is not applicable."
+            echo 'has-releases=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo 'has-releases=true' >> "$GITHUB_OUTPUT"
 
   # `marcel update` -- the route most users take.
