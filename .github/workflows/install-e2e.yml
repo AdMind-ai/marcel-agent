@@ -86,6 +86,10 @@ jobs:
           sparse-checkout: scripts/sandbox/pick-release-tags.sh
           sparse-checkout-cone-mode: false
       - id: pick
+        env:
+          # A tag-push run targets the commit the tag already points to. Testing
+          # an update FROM that same tag is a no-op, not an update path.
+          CURRENT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           set -euo pipefail
           if ! git tag --list 'v*' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
@@ -94,7 +98,17 @@ jobs:
             echo 'has-releases=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          args=(--count '${{ inputs.tag-count || 5 }}')
+          if [ -n "$CURRENT_TAG" ]; then
+            args+=(--exclude-tag "$CURRENT_TAG")
+          fi
+          tags="$(scripts/sandbox/pick-release-tags.sh "${args[@]}")"
+          if [ "$tags" = '[]' ]; then
+            echo "No prior Marcel release tags exist; update E2E starts with the next commit after this release."
+            echo 'tags=[]' >> "$GITHUB_OUTPUT"
+            echo 'has-releases=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
           echo 'has-releases=true' >> "$GITHUB_OUTPUT"

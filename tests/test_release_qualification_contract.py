@@ -77,6 +77,57 @@ def test_release_tag_picker_uses_semver_precedence(tmp_path):
         '"v2026.4.8","v2026.4.13"]'
     )
 
+    without_current_tag = subprocess.run(
+        [
+            str(script),
+            "--repo",
+            str(repo),
+            "--count",
+            "5",
+            "--exclude-tag",
+            "v2026.4.13",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert without_current_tag.stdout.strip() == (
+        '["v0.21.0-rc.1","v0.21.0-rc.2","v0.21.0","v2026.4.8"]'
+    )
+
+
+def test_release_tag_picker_allows_first_tag_to_exclude_itself(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "test"],
+        check=True,
+    )
+    (repo / "file").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "file"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "initial"], check=True)
+    subprocess.run(["git", "-C", str(repo), "tag", "v0.21.0-rc.1"], check=True)
+
+    script = REPO_ROOT / "scripts/sandbox/pick-release-tags.sh"
+    result = subprocess.run(
+        [
+            str(script),
+            "--repo",
+            str(repo),
+            "--exclude-tag",
+            "v0.21.0-rc.1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "[]"
+
 
 def test_workflow_doctor_policy_is_strict_and_secret_free():
     workflow = (REPO_ROOT / ".github/workflows/install-e2e.yml").read_text()
