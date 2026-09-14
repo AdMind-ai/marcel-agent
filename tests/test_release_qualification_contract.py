@@ -147,6 +147,10 @@ def test_tag_trigger_excludes_the_current_release_from_update_sources():
 
     assert '[[ "$GITHUB_REF_TYPE" == "tag" ]]' in workflow
     assert 'picker_args+=(--exclude-tag "$GITHUB_REF_NAME")' in workflow
+    assert "CANDIDATE_REF: ${{ inputs.candidate-ref }}" in workflow
+    assert '[[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]' in workflow
+    assert 'git show-ref --verify --quiet "refs/tags/$CANDIDATE_REF"' in workflow
+    assert 'picker_args+=(--exclude-tag "$CANDIDATE_REF")' in workflow
 
 
 def test_workflow_doctor_policy_is_strict_and_secret_free():
