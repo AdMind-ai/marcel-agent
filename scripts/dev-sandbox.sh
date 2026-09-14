@@ -270,11 +270,17 @@ if [ "$INSTALL_SHORTCUT" = true ]; then
   if [ -n "$INSTALL_REF" ]; then
     git -C "$UPSTREAM_REPO" show "$UPSTREAM_COMMIT:scripts/install.sh" \
       > "$SANDBOX_ROOT/root/http/hermes-agent.nousresearch.com/install.sh"
+    # v0.21.0-rc.1 requires this module before its piped installer can clone.
+    # /work is SANDBOX_ROOT/root, and a piped script launched from /work/repo
+    # resolves its repository root to /work. Keep it in a persistent sandbox
+    # for the current installer's re-run over that historical installation.
+    cp "$GIT_ROOT/marcel_migration.py" "$SANDBOX_ROOT/root/marcel_migration.py"
   else
     cp -a "$INSTALLER_PATH" "$SANDBOX_ROOT/root/http/hermes-agent.nousresearch.com/install.sh"
   fi
   set -- bash -c '
     set +e
+    set -o pipefail
     curl -fsSL https://raw.githubusercontent.com/AdMind-ai/marcel-agent/main/scripts/install.sh | bash -s -- "$@"
     install_status=$?
     if [ "$install_status" -eq 0 ] && [ -f /work/promote-main ]; then

@@ -1281,7 +1281,7 @@ function Test-Python {
             return $true
         }
     } catch { }
-    
+
     # Python not found -- use uv to install it (no admin needed!)
     Write-Info "Python $PythonVersion not found, installing via uv..."
     # Capture EAP outside the try block so the catch's restore call always
@@ -2588,7 +2588,7 @@ function Install-Venv {
     }
 
     Write-Info "Creating virtual environment with Python $($resolvedPython.Version)..."
-    
+
     Push-Location $InstallDir
 
     # Tasks we disabled below and must re-enable no matter how this stage
@@ -2705,7 +2705,7 @@ function Install-Venv {
             )
         }
     }
-    
+
     # Pass the already-validated private interpreter path and prohibit uv from
     # resolving or downloading a different Python during venv creation. Use
     # ProcessStartInfo because the desktop bootstrapper redirects this script;
@@ -2883,9 +2883,9 @@ function Restore-VenvBackup {
 
 function Install-Dependencies {
     Write-Info "Installing dependencies..."
-    
+
     Push-Location $InstallDir
-    
+
     if (-not $NoVenv) {
         # Tell uv to install into our venv (no activation needed)
         $env:VIRTUAL_ENV = "$InstallDir\venv"
@@ -3155,9 +3155,9 @@ print(','.join(scripts))
             throw "dashboard backend source failed syntax check: marcel_cli/web_server.py"
         }
     }
-    
+
     Pop-Location
-    
+
     Write-Success "All dependencies installed"
 }
 
@@ -3216,7 +3216,7 @@ function Install-MarcelCommandLaunchers {
 
 function Set-PathVariable {
     Write-Info "Setting up marcel command..."
-    
+
     if ($NoVenv) {
         $marcelBin = "$InstallDir"
     } else {
@@ -3231,7 +3231,7 @@ function Set-PathVariable {
         $marcelBin = "$MarcelHome\bin"
         Install-MarcelCommandLaunchers -Root $InstallDir -Destination $marcelBin | Out-Null
     }
-    
+
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
 
     # Migrate older layouts off the user PATH:
@@ -3251,7 +3251,7 @@ function Set-PathVariable {
             Write-Info "Removed legacy launcher entries from user PATH (kept marcel via $marcelBin)"
         }
     }
-    
+
     if ($currentPath -notlike "*$marcelBin*") {
         [Environment]::SetEnvironmentVariable(
             "Path",
@@ -3262,7 +3262,7 @@ function Set-PathVariable {
     } else {
         Write-Info "PATH already configured"
     }
-    
+
     # Set MARCEL_HOME so the Python code finds config/data in the right place.
     # Only needed on Windows where we install to %LOCALAPPDATA%\marcel instead
     # of the Unix default ~/.marcel
@@ -3272,10 +3272,10 @@ function Set-PathVariable {
         Write-Success "Set MARCEL_HOME=$MarcelHome"
     }
     $env:MARCEL_HOME = $MarcelHome
-    
+
     # Update current session
     $env:Path = "$marcelBin;$env:Path"
-    
+
     Write-Success "marcel command ready"
 }
 
@@ -3358,7 +3358,7 @@ function Write-BootstrapMarker {
 
 function Copy-ConfigTemplates {
     Write-Info "Setting up configuration files..."
-    
+
     # Create the MARCEL_HOME directory structure ($MarcelHome, default %LOCALAPPDATA%\marcel)
     New-Item -ItemType Directory -Force -Path "$MarcelHome\cron" | Out-Null
     New-Item -ItemType Directory -Force -Path "$MarcelHome\sessions" | Out-Null
@@ -3370,7 +3370,7 @@ function Copy-ConfigTemplates {
     New-Item -ItemType Directory -Force -Path "$MarcelHome\memories" | Out-Null
     New-Item -ItemType Directory -Force -Path "$MarcelHome\skills" | Out-Null
 
-    
+
     # Create .env
     $envPath = "$MarcelHome\.env"
     if (-not (Test-Path $envPath)) {
@@ -3385,7 +3385,7 @@ function Copy-ConfigTemplates {
     } else {
         Write-Info "$envPath already exists, keeping it"
     }
-    
+
     # Create config.yaml
     $configPath = "$MarcelHome\config.yaml"
     if (-not (Test-Path $configPath)) {
@@ -3397,7 +3397,7 @@ function Copy-ConfigTemplates {
     } else {
         Write-Info "$configPath already exists, keeping it"
     }
-    
+
     # Create SOUL.md if it doesn't exist (global persona file).
     # IMPORTANT: write without a BOM.  Windows PowerShell 5.1's
     # ``Set-Content -Encoding UTF8`` writes UTF-8 WITH a byte-order-mark
@@ -3419,9 +3419,9 @@ You are Marcel Agent, built by Nous Research. Be direct: match the length of you
         [System.IO.File]::WriteAllText($soulPath, $soulContent, $utf8NoBom)
         Write-Success "Created $soulPath (edit to customize personality)"
     }
-    
+
     Write-Success "Configuration directory ready: $MarcelHome"
-    
+
     # Seed bundled skills into $MarcelHome\skills (manifest-based, one-time per skill)
     Write-Info "Syncing bundled skills to $MarcelHome\skills ..."
     $pythonExe = "$InstallDir\venv\Scripts\python.exe"
@@ -4627,7 +4627,7 @@ function Write-Completion {
     Write-Host "|              [OK] Installation Complete!                |" -ForegroundColor Green
     Write-Host "+---------------------------------------------------------+" -ForegroundColor Green
     Write-Host ""
-    
+
     # Show file locations
     Write-Host "* Your files:" -ForegroundColor Cyan
     Write-Host ""
@@ -4640,7 +4640,7 @@ function Write-Completion {
     Write-Host "   Code:      " -NoNewline -ForegroundColor Yellow
     Write-Host "$MarcelHome\marcel-agent\"
     Write-Host ""
-    
+
     Write-Host "---------------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "* Commands:" -ForegroundColor Cyan
@@ -4658,19 +4658,19 @@ function Write-Completion {
     Write-Host "   marcel update       " -NoNewline -ForegroundColor Green
     Write-Host "Update to latest version"
     Write-Host ""
-    
+
     Write-Host "---------------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "[*] Restart your terminal for PATH changes to take effect" -ForegroundColor Yellow
     Write-Host ""
-    
+
     if (-not $HasNode) {
         Write-Host "Note: Node.js could not be installed automatically." -ForegroundColor Yellow
         Write-Host "Browser tools need Node.js. Install manually:" -ForegroundColor Yellow
         Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Yellow
         Write-Host ""
     }
-    
+
     if (-not $HasRipgrep) {
         Write-Host "Note: ripgrep (rg) was not installed. For faster file search:" -ForegroundColor Yellow
         Write-Host "  winget install BurntSushi.ripgrep.MSVC" -ForegroundColor Yellow
