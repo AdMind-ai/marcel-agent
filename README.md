@@ -1,8 +1,5 @@
 # Marcel
 
-On Windows, install natively with PowerShell using
-[`scripts/install.ps1`](scripts/install.ps1).
-
 Marcel is an autonomous, client-configurable agent framework for orchestrating capable AI work.
 It provides memory, schedules, messaging gateways, skills, plugins, and concurrent delegation
 through a business-oriented orchestration layer.
@@ -14,6 +11,28 @@ through a business-oriented orchestration layer.
 - Billing: https://marcel-agent.com/billing
 - API keys: https://marcel-agent.com/api-keys
 - Usage: https://marcel-agent.com/usage
+
+## Install
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AdMind-ai/marcel-agent/main/scripts/install.sh \
+  -o /tmp/marcel-install.sh
+bash /tmp/marcel-install.sh
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest `
+  https://raw.githubusercontent.com/AdMind-ai/marcel-agent/main/scripts/install.ps1 `
+  -OutFile marcel-install.ps1
+.\marcel-install.ps1
+```
+
+For a versioned installer and checksummed source archive, use the
+[GitHub Releases](https://github.com/AdMind-ai/marcel-agent/releases) page.
 
 ## Why Marcel exists
 

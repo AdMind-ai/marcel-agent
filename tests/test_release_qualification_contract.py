@@ -16,6 +16,18 @@ validate_doctor = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(validate_doctor)
 
 
+def test_rc2_release_defaults_and_vercel_hook_policy_are_explicit():
+    checksum_script = (REPO_ROOT / "scripts/release-checksums.py").read_text()
+    deploy_workflow = (REPO_ROOT / ".github/workflows/deploy-site.yml").read_text()
+
+    assert 'DEFAULT_TAG = "v0.21.0-rc.2"' in checksum_script
+    assert "VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}" in deploy_workflow
+    assert 'if [ -z "$VERCEL_DEPLOY_HOOK" ]' in deploy_workflow
+    assert "release publication will not trigger Vercel" in deploy_workflow
+    assert 'https://*) ;;' in deploy_workflow
+    assert 'curl -fsS --retry 3 --retry-delay 10 -X POST "$VERCEL_DEPLOY_HOOK"' in deploy_workflow
+
+
 def test_installers_retain_anonymous_fresh_clone_and_pinned_commit_paths():
     shell = (REPO_ROOT / "scripts/install.sh").read_text()
     powershell = (REPO_ROOT / "scripts/install.ps1").read_text()
