@@ -70,7 +70,17 @@ DETECTED_BROWSER_EXECUTABLE=""
 # skills, and gateway scaffolding). This is a stdlib-only module and never
 # prints or parses secret values. The legacy source remains intact for rollback.
 migrate_legacy_home_before_install() {
-    local root
+    local root legacy_override
+    legacy_override="${HERMES_HOME:-}"
+
+    # A fresh install has nothing to migrate. Do not require a checkout-local
+    # migration module before `curl | bash` has cloned the repository.
+    if { [ -z "$legacy_override" ] || [ ! -d "$legacy_override" ]; } \
+        && [ ! -d "${HOME:-}/.hermes" ] \
+        && [ ! -d "${HOME:-}/.config/hermes" ]; then
+        return 0
+    fi
+
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
     [ -f "$root/marcel_migration.py" ] || {
         log_error "Marcel migration module is unavailable; refusing to create MARCEL_HOME."
@@ -1492,6 +1502,7 @@ show_manual_install_hint() {
 
 clone_repo() {
     log_info "Installing to $INSTALL_DIR..."
+    local fresh_clone=false
 
     # An interrupted previous clone leaves a .git with no initial commit, where
     # the update path's `git stash` / `git checkout` abort with "You do not
@@ -1616,6 +1627,7 @@ EOF
         log_info "Trying SSH clone..."
         if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
            git clone --depth 1 --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
+            fresh_clone=true
             log_success "Cloned via SSH"
         else
             rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
@@ -1639,6 +1651,7 @@ EOF
                 if git clone --depth 1 --single-branch --branch "$BRANCH" \
                      "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
                     clone_ok=true
+                    fresh_clone=true
                     break
                 fi
                 rm -rf "$INSTALL_DIR" 2>/dev/null  # partial clone is unusable
@@ -1663,6 +1676,7 @@ EOF
                         && (git reset --hard HEAD >/dev/null 2>&1 \
                             || { sleep 5; git reset --hard HEAD >/dev/null 2>&1; })); then
                         clone_ok=true
+                        fresh_clone=true
                     else
                         rm -rf "$INSTALL_DIR" 2>/dev/null  # unusable checkout
                     fi
@@ -1720,7 +1734,17 @@ EOF
             fi
         else
             log_info "Pinning checkout to commit $INSTALL_COMMIT..."
-            if ! git checkout --detach "$INSTALL_COMMIT"; then
+            # A brand-new checkout cannot contain user changes. Force only in
+            # that case so EOL/attribute transitions between the branch tip and
+            # a pinned commit cannot leave false local modifications behind.
+            if [ "${fresh_clone:-false}" = true ]; then
+                checkout_ok=false
+                git checkout --detach --force "$INSTALL_COMMIT" && checkout_ok=true
+            else
+                checkout_ok=false
+                git checkout --detach "$INSTALL_COMMIT" && checkout_ok=true
+            fi
+            if [ "$checkout_ok" != true ]; then
                 log_error "Failed to detach at $INSTALL_COMMIT"
                 return 1
             fi

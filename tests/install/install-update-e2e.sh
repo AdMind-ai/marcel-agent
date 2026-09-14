@@ -174,7 +174,7 @@ installer_supports() {
     git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
     script="$(git show FETCH_HEAD:scripts/install.sh 2>/dev/null)" || return 1
   }
-  printf '%s' "$script" | grep -qF -- "$flag"
+  grep -qF -- "$flag" <<< "$script"
 }
 
 # Run the real install one-liner inside the sandbox. `ref` non-empty installs

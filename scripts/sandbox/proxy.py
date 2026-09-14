@@ -19,6 +19,7 @@ Usage: proxy.py <fixture-root> <certs-dir> <real-ca-bundle>
 
 import os
 import pathlib
+import select
 import socket
 import ssl
 import subprocess
@@ -32,6 +33,11 @@ LISTEN_ADDRESS = ('127.0.0.1', 8080)
 MAX_REQUEST_BYTES = 65536
 UPSTREAM_TIMEOUT_SECONDS = 30
 CERT_VALIDITY_DAYS = 2
+# npm opens many concurrent, reusable TLS connections. Passing its registry
+# through the one-request MITM below turns those into thousands of handshakes
+# and eventually produces socket retries. No fixture is served for this host,
+# so preserve the real end-to-end TLS connection instead.
+TLS_TUNNEL_HOSTS = {'registry.npmjs.org'}
 
 
 def read_request(conn):
@@ -168,10 +174,28 @@ def forward_http(conn, host, port, request, target):
         relay(upstream, conn)
 
 
+def tunnel_https(conn, host, port):
+    """Relay a CONNECT stream without terminating TLS."""
+    with socket.create_connection((host, port), timeout=UPSTREAM_TIMEOUT_SECONDS) as upstream:
+        conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+        sockets = (conn, upstream)
+        while True:
+            readable, _, _ = select.select(sockets, (), ())
+            for source in readable:
+                chunk = source.recv(MAX_REQUEST_BYTES)
+                if not chunk:
+                    return
+                destination = upstream if source is conn else conn
+                destination.sendall(chunk)
+
+
 def handle_connect(conn, target):
     """Intercept a CONNECT tunnel, terminating TLS with a minted cert."""
     host, _, port_text = target.rpartition(':')
     port = int(port_text or '443')
+    if host in TLS_TUNNEL_HOSTS:
+        tunnel_https(conn, host, port)
+        return
     conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
     cert, key = cert_for(host)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
