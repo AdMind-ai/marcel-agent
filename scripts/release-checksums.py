@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Create a deterministic SHA-256 manifest for release artifacts.
 
-The release process uses SemVer tags for this first prerelease even though the
-legacy release helper normally creates CalVer tags.  The expected tag is
-``v0.21.0-rc.1``; this script deliberately does not create tags, upload files,
+The Marcel prerelease process uses SemVer tags even though the legacy release
+helper normally creates CalVer tags. The defaults target the next candidate,
+``v0.21.0-rc.2``; this script deliberately does not create tags, upload files,
 or contact GitHub.
 
 Examples:
     python scripts/release-checksums.py dist/*
-    python scripts/release-checksums.py --version 0.21.0 --tag v0.21.0-rc.1 dist/*
+    python scripts/release-checksums.py --version 0.21.0 --tag v0.21.0-rc.2 dist/*
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import hashlib
 from pathlib import Path
 
 DEFAULT_VERSION = "0.21.0"
-DEFAULT_TAG = "v0.21.0-rc.1"
+DEFAULT_TAG = "v0.21.0-rc.2"
 
 
 def sha256(path: Path) -> str:
