@@ -14,7 +14,23 @@ from typing import Any
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _WORKER_ID = re.compile(r"[^a-z0-9._-]+")
-ACTIVITIES = ("search", "general", "coding", "image", "video", "communications", "custom")
+# ``image`` remains a legacy serialized activity. New setup choices split the worker role so
+# image generation uses the global image service while vision uses an explicitly vision-capable LLM.
+ACTIVITIES = (
+    "search", "general", "coding", "image_generation", "vision", "video",
+    "communications", "custom", "image",
+)
+ACTIVITY_LABELS = (
+    "Web search",
+    "General work",
+    "Coding",
+    "Image generation worker — LLM + global image service",
+    "Vision worker — explicit vision-capable LLM",
+    "Video",
+    "Communications",
+    "Custom",
+    "Legacy image worker (same as image generation)",
+)
 ROUTER_MODES = ("marcel_router", "direct_provider", "custom_endpoint")
 ACCOUNT_TYPES = ("google_workspace", "imap_smtp")
 MARCEL_SITE_URL = "https://marcel-agent.com"
@@ -51,6 +67,10 @@ _MODEL_PROVIDER_ALIASES = {
     "xai": "xai",
 }
 _MAX_AGENT_NAME_LENGTH = 128
+
+
+def _is_image_generation_activity(activity: str) -> bool:
+    return str(activity or "").strip().lower() in {"image", "image_generation"}
 
 # Curated aliases from the providers' public model catalogs. Keep this intentionally short:
 # Marcel's router catalog remains authoritative once connected.
@@ -173,7 +193,9 @@ ACTIVITY_CAPABILITY_DEFAULTS = {
     "search": {"web", "file", "memory"},
     "general": {"web", "file", "memory", "todo", "clarify"},
     "coding": {"coding", "memory", "todo"},
-    "image": {"vision", "image_gen", "file"},
+    "image": {"image_gen", "file"},
+    "image_generation": {"image_gen", "file"},
+    "vision": {"vision", "file"},
     "video": {"video", "video_gen", "vision", "file"},
     "communications": {"web", "file", "memory", "tts", "marcel-email"},
     "custom": set(),
@@ -481,6 +503,8 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
         value = worker.get(key)
         if value not in (None, ""):
             result[key] = str(value).strip()
+    if _is_image_generation_activity(activity):
+        result["image_service"] = "global"
     for source_key, target_key in (("toolsets", "toolsets"), ("tools", "tools"),
                                    ("fallbacks", "fallback_models"), ("fallback_models", "fallback_models")):
         value = worker.get(source_key, [])
@@ -642,7 +666,7 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
         "model_registry": [
             {
                 "model": model,
-                "provider": _provider_for_selected_model(model, values, ""),
+                "provider": _runtime_llm_provider(model, values, ""),
             }
             for model in available_models
         ],
@@ -770,7 +794,15 @@ def apply_marcel_config(config: dict[str, Any], values: dict[str, Any]) -> dict[
             continue
         worker = normalize_worker(raw_worker)
         worker_id = worker.pop("id")
-        worker["provider"] = _provider_for_selected_model(worker.get("model", ""), values, provider_id)
+        worker["provider"] = _runtime_llm_provider(worker.get("model", ""), values, provider_id)
+        toolsets = list(worker.get("toolsets") or worker.get("tools") or [])
+        activity = str(worker.get("activity") or "")
+        if _is_image_generation_activity(activity) and "image_gen" not in toolsets:
+            toolsets.append("image_gen")
+            worker["toolsets"] = toolsets
+        if activity == "vision" and "vision" not in toolsets:
+            toolsets.append("vision")
+            worker["toolsets"] = toolsets
         workers[worker_id] = worker
     delegation["workers"] = workers
     delegation.setdefault("worker_routing", {"strategy": "cheapest_capable", "default_worker": ""})
@@ -847,6 +879,7 @@ def _model_capabilities(entry: dict[str, Any]) -> set[str]:
         ("supports_vision", "vision"),
         ("supports_video_generation", "video_generation"),
         ("supports_video_analysis", "video"),
+        ("supports_tools", "supports_tools"),
         ("image_generation", "image_generation"),
         ("image_editing", "image_editing"),
         ("images", "image_generation"),
@@ -866,10 +899,10 @@ def _catalog_for_activity(
     activity: str = "", live_models: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, str]]:
     """Build one canonical picker source for primary, available, and fallback choices."""
-    if activity == "image":
-        # Legacy activity='image' means generation/editing.  Vision is intentionally
-        # never mixed into this lane because the runtime has no separate vision activity.
-        return _generation_catalog(live_models)
+    if _is_image_generation_activity(activity):
+        # Legacy activity='image' means an image-generation worker. Its LLM is a normal
+        # chat/tool model; image_gen is supplied by the global image service.
+        return _worker_llm_catalog(live_models)
     if activity == "vision":
         return _vision_catalog(live_models)
     if live_models:
@@ -890,6 +923,34 @@ def _catalog_for_activity(
         if entries:
             return entries
     return list(ACTIVITY_MODEL_CHOICES.get(activity, MODEL_CHOICES))
+
+
+def _worker_llm_catalog(
+    live_models: list[dict[str, Any]] | None = None,
+) -> list[tuple[str, str]]:
+    """Return chat/tool LLMs for image-generation workers, never image backends."""
+    if live_models:
+        result: list[tuple[str, str]] = []
+        for entry in live_models:
+            if not isinstance(entry, dict):
+                continue
+            model_id = str(entry.get("id") or "").strip()
+            capabilities = _model_capabilities(entry)
+            if not model_id or {"image_generation", "image_editing"} & capabilities:
+                continue
+            if capabilities and not (
+                {"chat", "chat_completions", "text", "tool_use", "tools", "supports_tools"}
+                & capabilities
+            ):
+                continue
+            provider = str(entry.get("provider") or entry.get("owned_by") or "").strip()
+            identity = f"{provider} / {model_id}" if provider else model_id
+            result.append((f"Router — chat/tool LLM — {identity}", model_id))
+        return result
+    return [
+        (f"Chat/tool LLM — {label}", model_id)
+        for label, model_id in ACTIVITY_MODEL_CHOICES.get("general", MODEL_CHOICES)
+    ]
 
 
 def _generation_catalog(
@@ -953,8 +1014,8 @@ def _choose_model(
     catalog = _catalog_for_activity(activity, live_models)
     if not catalog:
         setup.print_error(
-            "No compatible model with the required image capability is available."
-            if activity in {"image", "vision"} else
+            "No compatible model with the required image/vision capability is available."
+            if _is_image_generation_activity(activity) or activity == "vision" else
             f"No model is available for the {activity or 'general'} route."
         )
         return ""
@@ -971,7 +1032,7 @@ def _choose_model(
     if allow_automatic:
         choices.insert(0, "Automatic — let Marcel choose later")
         values.insert(0, "")
-    custom_enabled = not live_models and activity != "image"
+    custom_enabled = not live_models and activity != "vision"
     if custom_enabled:
         choices.append("Custom model ID…")
     default = values.index(current) if current in values else 0
@@ -1025,6 +1086,16 @@ def _provider_for_selected_model(
     return _direct_provider_for_model(model_id) or default
 
 
+def _runtime_llm_provider(model_id: str, values: dict[str, Any], default: str) -> str:
+    """Resolve worker transport, never treating Router display ownership as transport."""
+    mode = str(values.get("router_mode") or "").strip()
+    if mode == "marcel_router":
+        return "marcel"
+    if mode == "custom_endpoint":
+        return "marcel-custom"
+    return _direct_provider_for_model(model_id) or default
+
+
 def _choose_direct_provider(setup: Any, current: str = "") -> tuple[str, str, str, str, str]:
     """Explicitly choose a known direct provider before its model picker.
 
@@ -1072,6 +1143,17 @@ def _choose_available_models(
     catalog = _catalog_for_activity("", live_models)
     current_models = set(current or ())
     current_models.update([primary, *fallbacks])
+    catalog_by_id = {model_id: (label, model_id) for label, model_id in catalog}
+    ordered_catalog: list[tuple[str, str]] = []
+    for model_id in [*(current or ()), primary, *fallbacks]:
+        model_id = str(model_id).strip()
+        if not model_id:
+            continue
+        ordered_catalog.append(
+            catalog_by_id.pop(model_id, (f"Existing/custom — {model_id}", model_id))
+        )
+    ordered_catalog.extend(catalog_by_id.values())
+    catalog = ordered_catalog
     selected = setup.prompt_checklist(
         "Choose all models Marcel may use for future orchestration",
         [f"{label}  [{model_id}]" for label, model_id in catalog],
@@ -1167,13 +1249,13 @@ def _connect_required_direct_providers(
 
 def _choose_capabilities(setup: Any, activity: str) -> list[str]:
     defaults = ACTIVITY_CAPABILITY_DEFAULTS.get(activity, set())
-    if activity == "image":
+    if _is_image_generation_activity(activity) or activity == "vision":
         info = getattr(setup, "_info", None)
         if callable(info):
             info(
                 "Image capabilities are separate:",
-                "Vision analyzes images; Image creation generates or edits images. "
-                "Selecting one does not imply the other.",
+                "Image-generation workers use the global image service; vision workers use "
+                "only an explicitly vision-capable LLM. These routes stay separate.",
                 None,
             )
     preselected = [
@@ -1185,7 +1267,12 @@ def _choose_capabilities(setup: Any, activity: str) -> list[str]:
         [label for label, _ in SUB_AGENT_CAPABILITIES],
         pre_selected=preselected,
     )
-    return [SUB_AGENT_CAPABILITIES[index][1] for index in selected]
+    result = [SUB_AGENT_CAPABILITIES[index][1] for index in selected]
+    if _is_image_generation_activity(activity) and "image_gen" not in result:
+        result.append("image_gen")
+    if activity == "vision" and "vision" not in result:
+        result.append("vision")
+    return result
 
 
 def _choose_concurrency(setup: Any, activity: str) -> str:
@@ -1196,7 +1283,7 @@ def _choose_concurrency(setup: Any, activity: str) -> str:
         "4 — up to four tasks at once",
         "8 — up to eight tasks at once (high usage)",
     ]
-    default = 1 if activity in {"image", "video", "coding"} else 2
+    default = 1 if _is_image_generation_activity(activity) or activity in {"video", "coding"} else 2
     selected = setup.prompt_choice(
         "How many tasks can this sub-agent run at the same time?",
         choices,
@@ -1345,8 +1432,8 @@ def _fallback_catalog(
     activity: str, live_models: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, str]]:
     """Return capability-relevant fallbacks, with broad text choices and no duplicates."""
-    activity_catalog = _generation_catalog(live_models) if activity == "image" else _catalog_for_activity(activity, live_models)
-    source = activity_catalog if activity in {"image", "video", "vision"} else (
+    activity_catalog = _catalog_for_activity(activity, live_models)
+    source = activity_catalog if _is_image_generation_activity(activity) or activity in {"video", "vision"} else (
         *activity_catalog, *_catalog_for_activity("", live_models))
     result: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -1530,10 +1617,15 @@ def _print_main_agent_summary(setup: Any, values: dict[str, Any], config: dict[s
     memory_enabled = values.get("memory_maintenance_enabled", True)
     memory_interval = values.get("memory_maintenance_interval_hours", 6)
     accounts = values.get("accounts") or []
-    account_labels = [
-        str(account.get("label") or account.get("name") or account.get("kind") or account.get("type"))
-        for account in accounts if isinstance(account, dict)
-    ]
+    account_labels = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        label = str(account.get("label") or account.get("name") or account.get("kind") or account.get("type"))
+        ready = account.get("enabled", True) is not False and (
+            account.get("authorization_status", "verified") == "verified"
+        )
+        account_labels.append(f"{label} ({'ready' if ready else 'pending'})")
     video = config.get("video_gen") if isinstance(config.get("video_gen"), dict) else {}
     web = config.get("web") if isinstance(config.get("web"), dict) else {}
     search = values.get("web_backend") or web.get("backend") or "automatic"
@@ -1551,19 +1643,27 @@ def _print_main_agent_summary(setup: Any, values: dict[str, Any], config: dict[s
         f"- Accounts: {', '.join(account_labels) if account_labels else 'none configured'}",
         f"- Search: {search}; video: "
         f"{video.get('provider') or 'not configured'} / {video.get('model') or 'not configured'}",
-        f"- Telegram/channels: {'configured' if values.get('telegram_requested') else 'not configured'}",
+        f"- Telegram/channels: {'configured' if values.get('telegram_configured') else 'not configured'}",
         None,
     )
 
 
 def _print_subagent_summary(setup: Any, worker: dict[str, Any]) -> None:
     """Keep per-subagent summaries distinct from the main-agent summary."""
+    media_line = (
+        "- Image service: global registered image_gen backend (separate from this LLM)"
+        if _is_image_generation_activity(worker.get("activity", "")) else
+        "- Vision: explicit vision-capable LLM metadata required"
+        if worker.get("activity") == "vision" else
+        None
+    )
     setup._info(
         f"Sub-agent configured: {worker.get('name') or worker.get('id')}",
         f"- Activity: {worker.get('activity')}",
         f"- Model: {worker.get('model') or 'automatic'}",
         f"- Fallback order: {', '.join(worker.get('fallbacks') or ()) or 'none'}",
         f"- Capabilities: {', '.join(worker.get('toolsets') or ()) or 'none'}",
+        media_line,
         None,
     )
 
@@ -1903,17 +2003,17 @@ def setup_marcel(config: dict) -> None:
             })
 
     telegram_requested = setup.prompt_yes_no("Connect Telegram so you can test Marcel?", True)
-    values["telegram_requested"] = telegram_requested
     if telegram_requested:
         from marcel_cli.setup_platforms import _setup_telegram
         _setup_telegram()
+    values["telegram_configured"] = bool(setup.get_env_value("TELEGRAM_BOT_TOKEN"))
 
     # Everything owned by the main agent is complete before its summary and before specialists.
     _choose_image_provider(setup, config)
     _print_main_agent_summary(setup, values, config)
     while setup.prompt_yes_no("Add a sub-agent?", default=False):
         name = setup.prompt("Sub-agent name")
-        activity_index = setup.prompt_choice("Sub-agent activity", list(ACTIVITIES), 1)
+        activity_index = setup.prompt_choice("Sub-agent activity", list(ACTIVITY_LABELS), 1)
         activity = ACTIVITIES[activity_index]
         sub_agent_model = _choose_model(
             setup,
@@ -1922,11 +2022,16 @@ def setup_marcel(config: dict) -> None:
             activity=activity,
             live_models=live_models,
         )
-        if activity == "image":
+        if not sub_agent_model:
+            setup.print_error(
+                "This worker cannot be configured because no compatible LLM model is available."
+            )
+            continue
+        if _is_image_generation_activity(activity) or activity == "vision":
             setup._info(
-                "Image worker context: this is a separate sub-agent route.",
-                "Choose image generation/editing and image analysis (vision) capabilities independently; "
-                "it does not change the main agent's image default.",
+                "Worker media context: the main agent owns the registered image service.",
+                "Image generation workers use their selected LLM plus the global image_gen tool; "
+                "vision workers use only models with explicit vision metadata.",
                 None,
             )
         if activity == "search" and not values.get("search_provider_configured"):

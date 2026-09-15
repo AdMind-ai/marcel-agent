@@ -24,6 +24,7 @@ from marcel_cli.setup_marcel import (
     _fallback_catalog,
     _generation_catalog,
     _vision_catalog,
+    _worker_llm_catalog,
     _normalize_router_models,
     _catalog_for_activity,
     _confirm_fallback_order,
@@ -52,6 +53,7 @@ class _SetupStub:
     self.choice = choice
     self.custom = custom
     self.seen_choices = []
+    self.seen_checklist = []
     self.pre_selected = []
 
   def prompt_choice(self, _label, choices, _default, **_kwargs):
@@ -62,6 +64,7 @@ class _SetupStub:
     return self.custom
 
   def prompt_checklist(self, _label, _items, pre_selected=None):
+    self.seen_checklist = list(_items)
     self.pre_selected = list(pre_selected or [])
     return list(pre_selected or [])
 
@@ -376,8 +379,8 @@ class MarcelSetupTests(unittest.TestCase):
     setup = _SetupStub(1)
     selected = _choose_model(
         setup, "Sub-agent model for image", allow_automatic=True, activity="image")
-    self.assertIn(selected, [model_id for _, model_id in _generation_catalog()])
-    self.assertTrue(any("generation" in choice.lower() for choice in setup.seen_choices))
+    self.assertIn(selected, [model_id for _, model_id in _worker_llm_catalog()])
+    self.assertTrue(any("chat/tool" in choice.lower() for choice in setup.seen_choices))
     self.assertFalse(any("vision/reasoning" in choice.lower() for choice in setup.seen_choices))
     self.assertFalse(any("Claude Opus 5" in choice for choice in setup.seen_choices))
 
@@ -440,7 +443,8 @@ class MarcelSetupTests(unittest.TestCase):
   def test_media_fallbacks_stay_capability_specific(self):
     image_ids = [model_id for _, model_id in _fallback_catalog("image")]
     video_ids = [model_id for _, model_id in _fallback_catalog("video")]
-    self.assertTrue(any("image" in model_id for model_id in image_ids))
+    self.assertTrue(image_ids)
+    self.assertFalse(any(model_id.startswith("fal/") for model_id in image_ids))
     self.assertTrue(any("video" in model_id for model_id in video_ids))
     self.assertNotIn("anthropic/claude-opus-5", image_ids)
     self.assertNotIn("openai/gpt-5.6-luna", video_ids)
@@ -553,9 +557,9 @@ class MarcelSetupTests(unittest.TestCase):
     ]
     catalog = _catalog_for_activity("image", live)
     labels = [label for label, _ in catalog]
-    self.assertIn("Router — image generation/editing — vendor/generator", labels)
+    self.assertNotIn("vendor/generator", [model_id for _, model_id in catalog])
     self.assertNotIn("vendor/vision", [model_id for _, model_id in catalog])
-    self.assertNotIn("vendor/unknown", [model_id for _, model_id in catalog])
+    self.assertIn("vendor/unknown", [model_id for _, model_id in catalog])
 
   def test_available_models_preselect_existing_union_primary_and_fallbacks(self):
     setup = _SetupStub(0)
@@ -572,9 +576,19 @@ class MarcelSetupTests(unittest.TestCase):
     )
     self.assertEqual(
       selected,
-      [item[1] for item in MODEL_CHOICES
-       if item[1] in {MODEL_CHOICES[0][1], MODEL_CHOICES[1][1], MODEL_CHOICES[2][1]}],
+      [MODEL_CHOICES[2][1], MODEL_CHOICES[0][1], MODEL_CHOICES[1][1]],
     )
+
+  def test_available_models_keeps_existing_id_missing_from_catalog(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [],
+      current=["legacy/custom-model"],
+    )
+    self.assertIn("legacy/custom-model", selected)
+    self.assertTrue(any("Existing/custom" in choice for choice in setup.seen_checklist))
 
   def test_router_origin_normalization_is_stable(self):
     self.assertEqual(
@@ -643,13 +657,23 @@ class MarcelSetupTests(unittest.TestCase):
     self.assertEqual([item[1] for item in _vision_catalog(live)], ["vision"])
     self.assertEqual([item[1] for item in _generation_catalog(live)], ["generator"])
 
+  def test_vision_worker_model_and_fallbacks_are_explicit_vision_only(self):
+    live = [
+      {"id": "chat", "metadata": {"capabilities": ["chat"]}},
+      {"id": "vision", "metadata": {"capabilities": ["chat"], "supports_vision": True}},
+    ]
+    self.assertEqual(
+      [model_id for _, model_id in _fallback_catalog("vision", live)],
+      ["vision"],
+    )
+
   def test_registered_image_model_keeps_its_provider(self):
     self.assertEqual(
       _provider_for_selected_model("fal-ai/flux-2/klein/9b", {}, "openai-api"),
       "fal",
     )
 
-  def test_image_worker_serialization_keeps_fal_provider(self):
+  def test_image_worker_serialization_keeps_llm_provider(self):
     config = apply_marcel_config({}, {
       "agent_name": "TestAgent",
       "router_mode": "direct_provider",
@@ -663,7 +687,51 @@ class MarcelSetupTests(unittest.TestCase):
         "fallbacks": ["fal-ai/flux-2/klein/9b"],
       }],
     })
-    self.assertEqual(config["delegation"]["workers"]["artist"]["provider"], "fal")
+    self.assertEqual(config["delegation"]["workers"]["artist"]["provider"], "openai-api")
+
+  def test_router_worker_transport_stays_marcel_despite_owned_by_metadata(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "marcel_router",
+      "orchestrator_model": "vendor/chat",
+      "orchestrator_fallback_models": [],
+      "live_model_entries": [{
+        "id": "vendor/chat", "owned_by": "openai",
+        "metadata": {"capabilities": ["chat"]},
+      }],
+      "workers": [{
+        "id": "researcher", "activity": "general", "model": "vendor/chat",
+      }],
+    })
+    self.assertEqual(config["delegation"]["workers"]["researcher"]["provider"], "marcel")
+
+  def test_image_generation_worker_uses_llm_and_global_image_service(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": [],
+      "workers": [{
+        "id": "artist", "activity": "image_generation",
+        "model": "openai/gpt-5.6-terra",
+      }],
+    })
+    worker = config["delegation"]["workers"]["artist"]
+    self.assertEqual(worker["provider"], "openai-api")
+    self.assertEqual(worker["image_service"], "global")
+    self.assertIn("image_gen", worker["toolsets"])
+
+  def test_direct_image_generation_worker_uses_provider_scoped_llm_picker(self):
+    setup = _SetupStub(0)
+    selected = _choose_model(
+      setup,
+      "Image generation worker LLM",
+      activity="image_generation",
+      provider="openai-api",
+    )
+    self.assertTrue(selected.startswith("openai/"))
+    self.assertFalse(selected.startswith("fal"))
 
   def test_fallback_runtime_schema_replaces_legacy_key_in_order(self):
     config = {
