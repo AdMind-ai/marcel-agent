@@ -8,6 +8,8 @@ for the interactive layer to put a credential value in YAML.
 from __future__ import annotations
 
 import re
+import unicodedata
+from urllib.parse import urlsplit
 from typing import Any
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -48,6 +50,8 @@ _MODEL_PROVIDER_ALIASES = {
     "gemini": "gemini",
     "xai": "xai",
 }
+FIRST_INSTALL_AGENT_NAME = "Nova"
+_MAX_AGENT_NAME_LENGTH = 128
 
 # Curated aliases from the providers' public model catalogs. Keep this intentionally short:
 # Marcel's router catalog remains authoritative once connected.
@@ -176,8 +180,18 @@ ACTIVITY_CAPABILITY_DEFAULTS = {
     "custom": set(),
 }
 
+
+def _safe_soul_name(value: Any) -> str:
+    """Normalize a name for module-level soul templates before public helpers are defined."""
+    text = unicodedata.normalize("NFC", str(value or "")).strip()
+    text = " ".join(text.split())
+    if not text or any(unicodedata.category(character).startswith("C") for character in text):
+        return "Marcel"
+    return text[:_MAX_AGENT_NAME_LENGTH]
+
+
 def _build_previous_marcel_soul(agent_name: str = "Marcel") -> str:
-    name = str(agent_name or "Marcel").strip() or "Marcel"
+    name = _safe_soul_name(agent_name)
     return (
     f"You are {name}, an autonomous agent powered by the Marcel framework who has just come to life. "
     "On your first contact, sound "
@@ -193,7 +207,7 @@ def _build_previous_marcel_soul(agent_name: str = "Marcel") -> str:
 
 
 def build_marcel_soul(agent_name: str = "Marcel") -> str:
-    name = str(agent_name or "Marcel").strip() or "Marcel"
+    name = _safe_soul_name(agent_name)
     return (
         f"You are {name}, an autonomous executive partner powered by Marcel. Marcel is the product "
         "and framework; your personal name is the one given above. In every user-facing message, call "
@@ -253,10 +267,95 @@ def normalize_secret_reference(value: Any) -> str:
     return "${" + text + "}"
 
 
+def normalize_agent_name(value: Any, *, allow_empty: bool = False) -> str:
+    """Normalize a user-facing display name while rejecting unsafe terminal text.
+
+    Names are display data, not identifiers: Unicode letters, accents, emoji, and non-Latin
+    scripts are all valid.  Newlines, control characters, and format characters are rejected so a
+    name cannot forge wizard output or the generated SOUL/startup-card headings.
+    """
+    text = unicodedata.normalize("NFC", str(value or ""))
+    text = " ".join(text.strip().split())
+    if not text:
+        if allow_empty:
+            return ""
+        raise ValueError("Agent name cannot be blank.")
+    if len(text) > _MAX_AGENT_NAME_LENGTH:
+        raise ValueError(f"Agent name must be {_MAX_AGENT_NAME_LENGTH} characters or fewer.")
+    if any(unicodedata.category(character).startswith("C") for character in text):
+        raise ValueError("Agent name cannot contain control or formatting characters.")
+    return text
+
+
+def _prompt_agent_name(setup: Any, existing_name: str = "", *, reconfigure: bool = False) -> str:
+    """Collect a safe display name with distinct first-install/reconfigure copy."""
+    current = normalize_agent_name(existing_name, allow_empty=True)
+    if reconfigure and current:
+        setup._info("Leave Agent name blank to keep the current name.", None)
+        question = "Agent name"
+        # setup.prompt applies the current value when Enter is pressed; passing an empty default
+        # here is deliberate so an explicit blank can be recognized as "keep".
+        answer = setup.prompt(question, "")
+        if not answer:
+            return current
+    else:
+        setup._info(
+            f"Agent name: press Enter to use the proposed name “{FIRST_INSTALL_AGENT_NAME}”.",
+            None,
+        )
+        question = "Agent name"
+        answer = setup.prompt(question, FIRST_INSTALL_AGENT_NAME)
+    while True:
+        try:
+            return normalize_agent_name(answer)
+        except ValueError as exc:
+            setup.print_error(str(exc))
+            answer = setup.prompt(question, "")
+
+
 def _marcel_router_catalog_url(base_url: str) -> str:
     """Return the model-catalog URL for either a root or /v1 API base URL."""
     root = str(base_url or "").strip().rstrip("/")
     return f"{root}/models" if root.endswith("/v1") else f"{root}/v1/models"
+
+
+def _validate_router_url(base_url: str) -> str:
+    """Validate a router base URL without ever echoing credentials from it."""
+    value = str(base_url or "").strip().rstrip("/")
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Enter a complete HTTP(S) Router URL, including its hostname.")
+    if parsed.username or parsed.password:
+        raise ValueError("Router URLs must not contain usernames or passwords.")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Router URLs must not contain a query string or fragment.")
+    return value
+
+
+def _normalize_router_models(payload: Any) -> list[dict[str, Any]]:
+    """Return the live Router entries, retaining only safe model metadata."""
+    models = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in models:
+        if not isinstance(raw, dict):
+            continue
+        model_id = str(raw.get("id") or raw.get("name") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        metadata = raw.get("metadata")
+        marcel_metadata = raw.get("marcel")
+        if isinstance(metadata, dict):
+            metadata = dict(metadata)
+        elif isinstance(marcel_metadata, dict):
+            metadata = dict(marcel_metadata)
+        else:
+            metadata = {}
+        normalized.append({"id": model_id, "metadata": metadata})
+    return normalized
 
 
 def _verify_marcel_router(base_url: str, api_key: str) -> tuple[bool, str]:
@@ -265,8 +364,12 @@ def _verify_marcel_router(base_url: str, api_key: str) -> tuple[bool, str]:
     import urllib.error
     import urllib.request
 
-    if not str(base_url or "").strip():
-        return False, "The Marcel Routing API address is missing."
+    try:
+        base_url = _validate_router_url(base_url)
+    except ValueError as exc:
+        return False, str(exc)
+    if not str(api_key or "").strip():
+        return False, "A Marcel Routing API key is required."
     request = urllib.request.Request(
         _marcel_router_catalog_url(base_url),
         headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
@@ -279,12 +382,50 @@ def _verify_marcel_router(base_url: str, api_key: str) -> tuple[bool, str]:
         if exc.code in {401, 403}:
             return False, "The key was rejected. Check it in your Marcel Routing account."
         return False, f"Marcel Routing returned HTTP {exc.code}."
-    except Exception as exc:
-        return False, f"Could not reach Marcel Routing: {exc}"
-    models = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(models, list):
+    except Exception:
+        # Do not interpolate urllib exceptions: URLs can accidentally contain userinfo and
+        # transport exceptions can include request headers in third-party handlers.
+        return False, "Could not reach Marcel Routing. Check the URL and your network connection."
+    models = _normalize_router_models(payload)
+    if not models:
         return False, "Marcel Routing responded, but its model catalogue was not valid."
     return True, f"Connected successfully. {len(models)} models are available."
+
+
+def _discover_marcel_router_models(base_url: str, api_key: str) -> tuple[bool, str, list[dict[str, Any]]]:
+    """Validate and fetch a live Router catalogue for the setup pickers.
+
+    This intentionally has the same error boundary as :func:`_verify_marcel_router`, but returns
+    metadata for callers that need capability-aware image/vision choices.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        base_url = _validate_router_url(base_url)
+    except ValueError as exc:
+        return False, str(exc), []
+    if not str(api_key or "").strip():
+        return False, "A Marcel Routing API key is required.", []
+    request = urllib.request.Request(
+        _marcel_router_catalog_url(base_url),
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            return False, "The key was rejected. Check it in your Marcel Routing account.", []
+        return False, f"Marcel Routing returned HTTP {exc.code}.", []
+    except Exception:
+        return False, "Could not reach Marcel Routing. Check the URL and your network connection.", []
+    models = _normalize_router_models(payload)
+    if not models:
+        return False, "Marcel Routing responded, but its model catalogue was not valid.", []
+    return True, f"Connected successfully. {len(models)} models are available.", models
 
 
 def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
@@ -411,8 +552,13 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
         for model in values.get("available_models", [])
         if str(model).strip()
     ))
+    raw_agent_name = values.get("agent_name")
+    # The legacy fallback is intentional: loading/re-saving old config files (including configs
+    # whose name is Marcel) must not change their schema or identity.  The interactive first-run
+    # path validates names before it reaches this builder.
+    agent_name = normalize_agent_name(raw_agent_name) if raw_agent_name not in (None, "") else "Marcel"
     result: dict[str, Any] = {
-        "agent_name": str(values.get("agent_name") or "Marcel").strip() or "Marcel",
+        "agent_name": agent_name,
         "brand": {"name": "Marcel", "mascot": "monkey"},
         "router": {
             "mode": mode,
@@ -429,7 +575,7 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
             "health_path": "/api/health" if mode == "marcel_router" else "/health",
         },
         "orchestrator": {
-            "name": str(values.get("agent_name") or "Marcel").strip() or "Marcel",
+            "name": agent_name,
             "model": str(values.get("orchestrator_model") or "").strip(),
             "provider": (
                 "marcel" if mode == "marcel_router"
@@ -457,6 +603,15 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
             for model in available_models
         ],
     }
+    live_entries = values.get("live_model_entries")
+    if isinstance(live_entries, list):
+        # Keep the metadata that was actually returned by Router so future setup/reconfiguration
+        # can distinguish vision from generation without guessing from IDs.
+        result["routing"]["model_entries"] = [
+            {"id": str(entry.get("id")).strip(), "metadata": dict(entry.get("metadata") or {})}
+            for entry in live_entries
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip()
+        ]
     base_url = str(values.get("base_url") or "").strip().rstrip("/")
     if base_url:
         result["router"]["base_url"] = base_url
@@ -606,6 +761,70 @@ def _positive_int(value: Any, label: str) -> int:
     return result
 
 
+def _model_capabilities(entry: dict[str, Any]) -> set[str]:
+    """Normalize Router capability metadata without inferring it from model names."""
+    metadata = entry.get("metadata") if isinstance(entry, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    raw = metadata.get("capabilities", ())
+    if isinstance(raw, dict):
+        capabilities = {str(key).lower() for key, value in raw.items() if value is True}
+    else:
+        capabilities = set(raw if isinstance(raw, (list, tuple, set)) else ())
+    for key, capability in (
+        ("supports_image_generation", "image_generation"),
+        ("supports_image_editing", "image_editing"),
+        ("supports_image_analysis", "vision"),
+        ("supports_vision", "vision"),
+        ("supports_video_generation", "video_generation"),
+        ("supports_video_analysis", "video"),
+        ("image_generation", "image_generation"),
+        ("image_editing", "image_editing"),
+        ("images", "image_generation"),
+        ("image_analysis", "vision"),
+    ):
+        if metadata.get(key) is True:
+            capabilities.add(capability)
+    modalities = metadata.get("modalities", ())
+    if isinstance(modalities, (list, tuple, set)):
+        lowered = {str(item).lower() for item in modalities}
+        if "image" in lowered or "vision" in lowered:
+            capabilities.add("vision")
+    return {str(item).lower() for item in capabilities}
+
+
+def _catalog_for_activity(
+    activity: str = "", live_models: list[dict[str, Any]] | None = None,
+) -> list[tuple[str, str]]:
+    """Build one canonical picker source for primary, available, and fallback choices."""
+    if live_models:
+        entries: list[tuple[str, str]] = []
+        for entry in live_models:
+            model_id = str(entry.get("id") or "").strip()
+            if not model_id:
+                continue
+            capabilities = _model_capabilities(entry)
+            if activity == "image":
+                if "image_generation" in capabilities or "image_editing" in capabilities:
+                    route = "Image generation/editing"
+                elif "vision" in capabilities:
+                    route = "Image analysis (vision)"
+                else:
+                    route = "Image route — capability metadata unavailable"
+                entries.append((f"{route} — {model_id}", model_id))
+            elif activity == "video":
+                route = "Video generation" if "video_generation" in capabilities else (
+                    "Video analysis" if "video" in capabilities else
+                    "Video route — capability metadata unavailable"
+                )
+                entries.append((f"{route} — {model_id}", model_id))
+            else:
+                entries.append((f"Router — {model_id}", model_id))
+        if entries:
+            return entries
+    return list(ACTIVITY_MODEL_CHOICES.get(activity, MODEL_CHOICES))
+
+
 def _choose_model(
     setup: Any,
     label: str,
@@ -613,18 +832,21 @@ def _choose_model(
     *,
     allow_automatic: bool = False,
     activity: str = "",
+    live_models: list[dict[str, Any]] | None = None,
 ) -> str:
     """Show a compact provider-grouped catalog while retaining a custom-ID escape hatch."""
-    catalog = ACTIVITY_MODEL_CHOICES.get(activity, MODEL_CHOICES)
+    catalog = _catalog_for_activity(activity, live_models)
     values = [model_id for _, model_id in catalog]
     choices = [f"{title}  [{model_id}]" for title, model_id in catalog]
     if allow_automatic:
         choices.insert(0, "Automatic — let Marcel choose later")
         values.insert(0, "")
-    choices.append("Custom model ID…")
-    default = values.index(current) if current in values else len(choices) - 1 if current else 0
+    custom_enabled = not live_models
+    if custom_enabled:
+        choices.append("Custom model ID…")
+    default = values.index(current) if current in values else 0
     selected = setup.prompt_choice(label, choices, default)
-    if selected == len(choices) - 1:
+    if custom_enabled and selected == len(choices) - 1:
         return setup.prompt("Custom model ID (provider/model)", current)
     return values[selected]
 
@@ -657,17 +879,21 @@ def _required_direct_providers(values: dict[str, Any]) -> list[str]:
     return providers
 
 
-def _choose_available_models(setup: Any, primary: str, fallbacks: list[str]) -> list[str]:
+def _choose_available_models(
+    setup: Any, primary: str, fallbacks: list[str], *,
+    live_models: list[dict[str, Any]] | None = None,
+) -> list[str]:
     """Choose the model pool Marcel may use for future orchestration."""
+    catalog = _catalog_for_activity("", live_models)
     current = set([primary, *fallbacks])
     selected = setup.prompt_checklist(
         "Choose all models Marcel may use for future orchestration",
-        [f"{label}  [{model_id}]" for label, model_id in MODEL_CHOICES],
+        [f"{label}  [{model_id}]" for label, model_id in catalog],
         pre_selected=[
-            index for index, (_, model_id) in enumerate(MODEL_CHOICES) if model_id in current
+            index for index, (_, model_id) in enumerate(catalog) if model_id in current
         ],
     )
-    return [MODEL_CHOICES[index][1] for index in selected]
+    return [catalog[index][1] for index in selected]
 
 
 def _choose_voice_model(setup: Any, config: dict[str, Any], agent_name: str = "") -> None:
@@ -755,6 +981,15 @@ def _connect_required_direct_providers(
 
 def _choose_capabilities(setup: Any, activity: str) -> list[str]:
     defaults = ACTIVITY_CAPABILITY_DEFAULTS.get(activity, set())
+    if activity == "image":
+        info = getattr(setup, "_info", None)
+        if callable(info):
+            info(
+                "Image capabilities are separate:",
+                "Vision analyzes images; Image creation generates or edits images. "
+                "Selecting one does not imply the other.",
+                None,
+            )
     preselected = [
         index for index, (_, toolset) in enumerate(SUB_AGENT_CAPABILITIES)
         if toolset in defaults
@@ -811,40 +1046,93 @@ def _choose_memory_interval(setup: Any, current: Any = 6) -> int:
 
 def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
     """Choose and, when needed, connect Marcel's image backend."""
-    providers = (
-        ("OpenAI — GPT Image 2", "openai", "OPENAI_API_KEY", "gpt-image-2-medium"),
-        ("Google Gemini — Gemini Flash Image", "gemini", "GEMINI_API_KEY", "gemini-2.5-flash-image"),
-        ("xAI — Grok Imagine", "xai", "XAI_API_KEY", "grok-imagine-image-2.0"),
-    )
+    providers: list[tuple[str, str, str, str]] = []
+    existing_marcel = config.get("marcel") if isinstance(config.get("marcel"), dict) else {}
+    routing = existing_marcel.get("routing") if isinstance(existing_marcel.get("routing"), dict) else {}
+    live_models = routing.get("model_entries") if isinstance(routing.get("model_entries"), list) else []
+    router_image_models = [
+        entry for entry in live_models if isinstance(entry, dict)
+        and {"image_generation", "image_editing"} & _model_capabilities(entry)
+    ]
+    if router_image_models:
+        providers.append((
+            "Marcel Router — main agent image service [available via Marcel Router]",
+            "marcel", "", str(router_image_models[0].get("id") or ""),
+        ))
+    # FAL is the in-tree, genuinely registered image provider. Its model IDs and capabilities
+    # come from the authoritative provider catalog rather than this wizard.
+    try:
+        from tools.image_generation_catalog import FAL_MODELS, DEFAULT_MODEL
+        providers.append((
+            f"FAL.ai — registered image generation/editing models "
+            f"[{'requires direct provider connection' if not setup.get_env_value('FAL_KEY') else 'available'}]",
+            "fal", "FAL_KEY", str(DEFAULT_MODEL),
+        ))
+        if FAL_MODELS:
+            current_model = str((config.get("image_gen") or {}).get("model") or "")
+            if current_model in FAL_MODELS:
+                providers[-1] = (providers[-1][0], "fal", "FAL_KEY", current_model)
+    except Exception:
+        providers.append(("Registered image provider [unavailable]", "fal", "FAL_KEY", ""))
+    try:
+        from agent.image_gen_registry import list_providers
+        for image_provider in list_providers():
+            provider_name = str(getattr(image_provider, "name", "") or "").strip()
+            if not provider_name or provider_name == "fal":
+                continue
+            try:
+                models = image_provider.list_models() or []
+                model = str(image_provider.default_model() or "")
+            except Exception:
+                models, model = [], ""
+            if not model and models:
+                model = str(models[0].get("id") or "") if isinstance(models[0], dict) else ""
+            available = False
+            try:
+                available = bool(image_provider.is_available())
+            except Exception:
+                available = False
+            state = "available" if available else "unavailable"
+            providers.append((f"{provider_name} — registered provider [{state}]",
+                              provider_name, "", model))
+    except Exception:
+        pass
+    if not providers:
+        providers = [("No registered image provider [unavailable]", "", "", "")]
     current = str((config.get("image_gen") or {}).get("provider") or "")
     default = next((i for i, item in enumerate(providers) if item[1] == current), 0)
-    labels = [
-        f"{label}  [{'ready' if setup.get_env_value(key) else 'requires connection'}]"
-        for label, _provider, key, _model in providers
-    ]
     selected = setup.prompt_choice(
-        "Which service should Marcel use to create images?",
-        labels,
+        "Which image service should the main agent use by default?",
+        [item[0] for item in providers],
         default,
-        description="You can change this later. Marcel will use the selected service automatically.",
+        description=(
+            "This is the main agent's default for image generation and editing; "
+            "image analysis (vision) is configured separately."
+        ),
     )
     label, provider, key_env, model = providers[selected]
-    if not setup.get_env_value(key_env):
+    if key_env and not setup.get_env_value(key_env):
         api_key = setup.prompt(f"{label} API key", password=True)
         if api_key:
             setup.save_env_value(key_env, api_key)
             setup.print_success(f"{label} connected securely.")
         else:
             setup.print_error(
-                f"{label} was not connected. Image creation will remain unavailable.")
+                f"{label} was not connected. Image generation/editing remains unavailable.")
             return
+    if not provider or not model:
+        setup.print_error("No registered image service is currently available.")
+        return
     config["image_gen"] = {"provider": provider, "model": model}
 
 
-def _fallback_catalog(activity: str) -> list[tuple[str, str]]:
+def _fallback_catalog(
+    activity: str, live_models: list[dict[str, Any]] | None = None,
+) -> list[tuple[str, str]]:
     """Return capability-relevant fallbacks, with broad text choices and no duplicates."""
-    activity_catalog = ACTIVITY_MODEL_CHOICES.get(activity, ())
-    source = activity_catalog if activity in {"image", "video"} else (*activity_catalog, *MODEL_CHOICES)
+    activity_catalog = _catalog_for_activity(activity, live_models)
+    source = activity_catalog if activity in {"image", "video"} else (
+        *activity_catalog, *_catalog_for_activity("", live_models))
     result: list[tuple[str, str]] = []
     seen: set[str] = set()
     for label, model_id in source:
@@ -854,14 +1142,47 @@ def _fallback_catalog(activity: str) -> list[tuple[str, str]]:
     return result
 
 
-def _choose_fallback_models(setup: Any, activity: str, primary: str) -> list[str]:
-    catalog = _fallback_catalog(activity)
+def _confirm_fallback_order(
+    setup: Any, options: list[tuple[str, str]], selected: list[int],
+) -> list[int]:
+    """Confirm exact fallback order with a small numbered editor.
+
+    Checklists are naturally alphabetical/index ordered, which is not a useful retry policy.
+    Multiple selections therefore get an explicit order editor; Enter keeps the displayed order,
+    while a comma-separated list (for example ``2,1``) moves entries accordingly.
+    """
+    if len(selected) < 2:
+        return selected
+    ordered = list(selected)
+    lines = [f"{number}. {options[index][0]} [{options[index][1]}]"
+             for number, index in enumerate(ordered, 1)]
+    setup._info("Fallback order (first retry to last):", *lines, None)
+    raw = setup.prompt(
+        "Fallback order by number (Enter keeps this order)",
+        ",".join(str(number) for number in range(1, len(ordered) + 1)),
+    )
+    try:
+        requested = [int(item.strip()) for item in str(raw).split(",") if item.strip()]
+        if sorted(requested) != list(range(1, len(ordered) + 1)):
+            raise ValueError
+    except (TypeError, ValueError):
+        setup.print_error("Invalid fallback order; keeping the selected order.")
+        return ordered
+    return [ordered[number - 1] for number in requested]
+
+
+def _choose_fallback_models(
+    setup: Any, activity: str, primary: str,
+    *, live_models: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    catalog = _fallback_catalog(activity, live_models)
     options = [(label, model_id) for label, model_id in catalog if model_id != primary]
     selected = setup.prompt_checklist(
         "Choose fallback models (used in this order)",
         [f"{label}  [{model_id}]" for label, model_id in options],
         pre_selected=[],
     )
+    selected = _confirm_fallback_order(setup, options, selected)
     return [options[index][1] for index in selected]
 
 
@@ -974,6 +1295,33 @@ to the user's goal; offer to complete it, but never interrupt unrelated work wit
     (get_marcel_home() / "MARCEL_WELCOME.md").write_text(content, encoding="utf-8")
 
 
+def _print_main_agent_summary(setup: Any, values: dict[str, Any], config: dict[str, Any]) -> None:
+    """Show the completed main-agent choices before opening the sub-agent loop."""
+    image = config.get("image_gen") if isinstance(config.get("image_gen"), dict) else {}
+    setup._info(
+        "Main agent configured:",
+        f"- Identity: {values.get('agent_name')}",
+        f"- Router/provider: {values.get('router_mode')}",
+        f"- Orchestrator: {values.get('orchestrator_model') or 'automatic'}",
+        f"- Fallback order: {', '.join(values.get('orchestrator_fallback_models') or ()) or 'none'}",
+        f"- Main image generation/editing default: "
+        f"{image.get('provider') or 'unavailable'} / {image.get('model') or 'not configured'}",
+        None,
+    )
+
+
+def _print_subagent_summary(setup: Any, worker: dict[str, Any]) -> None:
+    """Keep per-subagent summaries distinct from the main-agent summary."""
+    setup._info(
+        f"Sub-agent configured: {worker.get('name') or worker.get('id')}",
+        f"- Activity: {worker.get('activity')}",
+        f"- Model: {worker.get('model') or 'automatic'}",
+        f"- Fallback order: {', '.join(worker.get('fallbacks') or ()) or 'none'}",
+        f"- Capabilities: {', '.join(worker.get('toolsets') or ()) or 'none'}",
+        None,
+    )
+
+
 def setup_marcel(config: dict) -> None:
     """Interactively configure Marcel without ever collecting secret values."""
     # Resolve through setup at call time so setup's prompt helpers remain monkeypatchable.
@@ -992,7 +1340,7 @@ def setup_marcel(config: dict) -> None:
     setup.print_header("Marcel Agent")
     setup._info("Configure Marcel's router, orchestration workers, memory, and account metadata.",
                 "Secrets are referenced by environment variable and are never written to config.yaml.", None)
-    agent_name = setup.prompt("Agent name", str(existing.get("agent_name") or "Marcel"))
+    agent_name = _prompt_agent_name(setup, str(existing.get("agent_name") or ""), reconfigure=bool(existing))
     current_mode = str(router.get("mode") or "marcel_router")
     mode_index = setup.prompt_choice(
         "Connection",
@@ -1005,8 +1353,12 @@ def setup_marcel(config: dict) -> None:
     )
     current_orchestrator = existing.get("orchestrator") if isinstance(existing.get("orchestrator"), dict) else {}
     current_orchestrator_model = str(current_orchestrator.get("model") or "")
-    orchestrator_model = _choose_model(setup, "Orchestrator model", current_orchestrator_model)
-    orchestrator_fallbacks = _choose_fallback_models(setup, "general", orchestrator_model)
+    routing = existing.get("routing") if isinstance(existing.get("routing"), dict) else {}
+    existing_live_models = (
+        routing.get("model_entries")
+        if current_mode == "marcel_router" and isinstance(routing.get("model_entries"), list)
+        else []
+    )
     values: dict[str, Any] = {
         "agent_name": agent_name,
         "router_mode": ROUTER_MODES[mode_index],
@@ -1017,27 +1369,23 @@ def setup_marcel(config: dict) -> None:
         "api_key_ref": str(router.get("key_env") or "MARCEL_ROUTER_API_KEY"),
         "direct_provider": str(router.get("provider") or ""),
         "api_mode": str(router.get("api_mode") or "chat_completions"),
-        "orchestrator_model": orchestrator_model,
-        "orchestrator_fallback_models": orchestrator_fallbacks,
-        "available_models": _choose_available_models(
-            setup, orchestrator_model, orchestrator_fallbacks),
+        "orchestrator_model": "",
+        "orchestrator_fallback_models": [],
+        "available_models": [],
+        "live_model_entries": list(existing_live_models),
         "workers": worker_values,
         "accounts": list(account_values),
     }
     handled_direct_providers: set[str] = set()
+    live_models: list[dict[str, Any]] = list(existing_live_models)
     if values["router_mode"] == "direct_provider":
         provider_ids = [item[1] for item in DIRECT_PROVIDERS]
-        inferred_provider = _direct_provider_for_model(values["orchestrator_model"])
-        selected_provider = inferred_provider or values["direct_provider"]
+        # Select/connect the provider before showing any model picker.  Existing configurations
+        # retain their provider; a brand-new direct setup starts with the first native provider
+        # and can still choose a different model/provider in the next prompt.
+        selected_provider = values["direct_provider"] if values["direct_provider"] in provider_ids else provider_ids[0]
         if selected_provider in provider_ids:
             provider = DIRECT_PROVIDERS[provider_ids.index(selected_provider)]
-        else:
-            provider = DIRECT_PROVIDERS[setup.prompt_choice(
-                "API provider",
-                [item[0] for item in DIRECT_PROVIDERS],
-                0,
-                description="The custom model ID does not identify a known provider.",
-            )]
         _, provider_id, key_env, base_url, api_mode = provider
         values.update(direct_provider=provider_id, api_key_ref=key_env, base_url=base_url, api_mode=api_mode)
         api_key = setup.prompt(f"{provider[0]} API key", password=True)
@@ -1047,11 +1395,6 @@ def setup_marcel(config: dict) -> None:
         elif not setup.get_env_value(key_env):
             setup.print_error(f"No API key configured for {provider[0]}.")
             return
-        handled_direct_providers = _connect_required_direct_providers(
-            setup,
-            {**values, "workers": []},
-            skip={provider_id},
-        )
         handled_direct_providers.add(provider_id)
     else:
         values["base_url"] = setup.prompt(
@@ -1062,64 +1405,56 @@ def setup_marcel(config: dict) -> None:
         if values["router_mode"] == "marcel_router":
             key_env = values["api_key_ref"] or "MARCEL_ROUTER_API_KEY"
             existing_router_key = setup.get_env_value(key_env)
-            if existing_router_key:
-                key_action = setup.prompt_choice(
-                    "Marcel Routing account",
-                    [
-                        "Use my existing API key",
-                        "Replace it with another API key",
-                        "Open the Marcel Routing website",
-                    ],
-                    0,
-                    description="Your existing key is stored securely and will never be displayed.",
-                )
-                if key_action == 2:
-                    setup._info(
-                        "Marcel Routing",
-                        f"Create or manage your API keys at {MARCEL_API_KEYS_URL}",
-                        None,
+            while True:
+                if existing_router_key:
+                    key_action = setup.prompt_choice(
+                        "Marcel Routing account",
+                        [
+                            "Use my existing API key",
+                            "Replace it with another API key",
+                            "Open the Marcel Routing website",
+                        ],
+                        0,
+                        description="Your existing key is stored securely and will never be displayed.",
                     )
-                    if not setup.prompt_yes_no("Continue using the existing key?", True):
-                        return
-                router_key = (
-                    setup.prompt("New Marcel Routing API key", password=True)
-                    if key_action == 1 else existing_router_key
-                )
-            else:
-                key_action = setup.prompt_choice(
-                    "Do you already have a Marcel Routing API key?",
-                    [
-                        "Yes — enter my API key",
-                        "No — create a Marcel Routing account",
-                        "Not now — finish setup later",
-                    ],
-                    0,
-                    description="One Marcel Routing key gives Marcel access to every model enabled for your account.",
-                )
-                if key_action == 2:
-                    setup._info(None, "Marcel setup paused. Run it again when you are ready.")
+                    if key_action == 2:
+                        setup._info(
+                            "Marcel Routing",
+                            f"Create or manage your API keys at {MARCEL_API_KEYS_URL}",
+                            None,
+                        )
+                        if not setup.prompt_yes_no("Continue using the existing key?", True):
+                            return
+                    router_key = (
+                        setup.prompt("New Marcel Routing API key", password=True)
+                        if key_action == 1 else existing_router_key
+                    )
+                else:
+                    router_key = setup.prompt("Marcel Routing API key", password=True)
+                if not router_key:
+                    setup.print_error("No Marcel Routing API key was provided.")
+                else:
+                    verified, message, discovered = _discover_marcel_router_models(
+                        values["base_url"], router_key)
+                    if verified:
+                        live_models = discovered
+                        values["live_model_entries"] = discovered
+                        if router_key != existing_router_key:
+                            setup.save_env_value(key_env, router_key)
+                        setup.print_success(message)
+                        break
+                    setup.print_error(message)
+                if not setup.prompt_yes_no("Retry Marcel Router connection?", True):
                     return
-                if key_action == 1:
-                    setup._info(
-                        "Create your Marcel Routing account",
-                        f"Open {MARCEL_ROUTING_SITE_URL}, create an account, and generate an API key.",
-                        None,
-                    )
-                    if not setup.prompt_yes_no("Have you created your API key?", True):
-                        setup._info(None, "Marcel setup paused. Run it again after creating the key.")
-                        return
-                router_key = setup.prompt("Marcel Routing API key", password=True)
-            if not router_key:
-                setup.print_error("No Marcel Routing API key was provided.")
-                return
-            verified, message = _verify_marcel_router(values["base_url"], router_key)
-            if not verified:
-                setup.print_error(message)
-                return
-            if router_key != existing_router_key:
-                setup.save_env_value(key_env, router_key)
-            setup.print_success(message)
+                existing_router_key = ""
+                values["base_url"] = setup.prompt(
+                    "Marcel Router base URL", values["base_url"])
         else:
+            try:
+                values["base_url"] = _validate_router_url(values["base_url"])
+            except ValueError as exc:
+                setup.print_error(str(exc))
+                return
             values["api_key_ref"] = setup.prompt(
                 "API key environment variable (never the key itself)",
                 values["api_key_ref"] or "MARCEL_CUSTOM_API_KEY").replace("${", "").replace("}", "")
@@ -1131,6 +1466,39 @@ def setup_marcel(config: dict) -> None:
                 setup.print_error("No API key configured for the custom endpoint.")
                 return
 
+    # Main-agent model policy is deliberately after provider/Router validation and discovery.
+    # A failed connection can therefore be retried without replaying unrelated model prompts.
+    orchestrator_model = _choose_model(
+        setup, "Orchestrator model", current_orchestrator_model, live_models=live_models)
+    orchestrator_fallbacks = _choose_fallback_models(
+        setup, "general", orchestrator_model, live_models=live_models)
+    values["orchestrator_model"] = orchestrator_model
+    values["orchestrator_fallback_models"] = orchestrator_fallbacks
+    values["available_models"] = _choose_available_models(
+        setup, orchestrator_model, orchestrator_fallbacks, live_models=live_models)
+    if values["router_mode"] == "direct_provider":
+        inferred_provider = _direct_provider_for_model(orchestrator_model)
+        provider_specs = {item[1]: item for item in DIRECT_PROVIDERS}
+        if inferred_provider in provider_specs and inferred_provider != values["direct_provider"]:
+            # Keep the native runtime provider consistent when a user picks a model from another
+            # direct catalog. The primary provider was connected before the picker; this secondary
+            # connection is immediate and still precedes image/sub-agent setup.
+            spec = provider_specs[inferred_provider]
+            values.update(
+                direct_provider=inferred_provider,
+                api_key_ref=spec[2],
+                base_url=spec[3],
+                api_mode=spec[4],
+            )
+            handled_direct_providers = _connect_required_direct_providers(
+                setup, values, skip=handled_direct_providers)
+    if values["router_mode"] == "direct_provider":
+        # Main fallback credentials are part of main-agent completion; do not defer them until
+        # after specialist prompts.
+        handled_direct_providers = _connect_required_direct_providers(
+            setup, values, skip=handled_direct_providers)
+    _choose_image_provider(setup, config)
+    _print_main_agent_summary(setup, values, config)
     while setup.prompt_yes_no("Add a sub-agent?", default=False):
         name = setup.prompt("Sub-agent name")
         activity_index = setup.prompt_choice("Sub-agent activity", list(ACTIVITIES), 1)
@@ -1140,7 +1508,15 @@ def setup_marcel(config: dict) -> None:
             f"Sub-agent model for {activity}",
             allow_automatic=True,
             activity=activity,
+            live_models=live_models,
         )
+        if activity == "image":
+            setup._info(
+                "Image worker context: this is a separate sub-agent route.",
+                "Choose image generation/editing and image analysis (vision) capabilities independently; "
+                "it does not change the main agent's image default.",
+                None,
+            )
         if activity == "search" and not values.get("search_provider_configured"):
             setup._info(
                 "Choose how this specialist searches the web.",
@@ -1168,24 +1544,22 @@ def setup_marcel(config: dict) -> None:
                     setup.print_error(
                         "No Brave Search API key was provided; Marcel will use automatic web search.")
             values["search_provider_configured"] = True
-        fallback_models = _choose_fallback_models(setup, activity, sub_agent_model)
-        values["workers"].append({
+        fallback_models = _choose_fallback_models(
+            setup, activity, sub_agent_model, live_models=live_models)
+        worker = {
             "name": name,
             "activity": activity,
             "model": sub_agent_model,
             "fallbacks": fallback_models,
             "toolsets": _choose_capabilities(setup, activity),
             "concurrency": _choose_concurrency(setup, activity),
-        })
+        }
+        values["workers"].append(worker)
+        _print_subagent_summary(setup, worker)
 
     if values["router_mode"] == "direct_provider":
         _connect_required_direct_providers(
-            setup,
-            values,
-            skip=handled_direct_providers,
-        )
-
-    _choose_image_provider(setup, config)
+            setup, values, skip=handled_direct_providers)
 
     # A direct xAI key also enables video generation.
     if setup.get_env_value("XAI_API_KEY"):

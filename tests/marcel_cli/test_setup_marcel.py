@@ -20,12 +20,16 @@ from marcel_cli.setup_marcel import (
     _choose_concurrency,
     _choose_memory_interval,
     _fallback_catalog,
+    _catalog_for_activity,
+    _confirm_fallback_order,
     _connect_required_direct_providers,
     _direct_provider_for_model,
     _required_direct_providers,
+    build_marcel_config,
     apply_marcel_config,
     ensure_marcel_soul,
     normalize_account,
+    normalize_agent_name,
     normalize_secret_reference,
     setup_marcel,
 )
@@ -466,6 +470,44 @@ class MarcelSetupTests(unittest.TestCase):
     self.assertIn("busy CEO", soul)
     self.assertIn("plain everyday language", soul)
     self.assertNotIn("You are Marcel", soul)
+
+  def test_agent_name_is_unicode_normalized_and_control_safe(self):
+    self.assertEqual(normalize_agent_name("  Jose\u0301   😀 "), "Jos\u00e9 😀")
+    with self.assertRaises(ValueError):
+      normalize_agent_name("\u202eunsafe")
+    with self.assertRaises(ValueError):
+      normalize_agent_name("")
+
+  def test_legacy_empty_builder_name_keeps_marcel_compatibility(self):
+    result = build_marcel_config({"router_mode": "marcel_router"})
+    self.assertEqual(result["agent_name"], "Marcel")
+    self.assertEqual(result["orchestrator"]["name"], "Marcel")
+
+  def test_live_router_catalog_labels_image_routes_from_metadata(self):
+    live = [
+      {"id": "vendor/generator", "metadata": {"capabilities": ["image_generation"]}},
+      {"id": "vendor/vision", "metadata": {"capabilities": ["vision"]}},
+      {"id": "vendor/unknown", "metadata": {"capabilities": ["chat"]}},
+    ]
+    catalog = _catalog_for_activity("image", live)
+    labels = [label for label, _ in catalog]
+    self.assertIn("Image generation/editing — vendor/generator", labels)
+    self.assertIn("Image analysis (vision) — vendor/vision", labels)
+    self.assertIn("capability metadata unavailable", labels[-1])
+
+  def test_fallback_order_editor_reorders_selected_models(self):
+    class OrderingSetup(_SetupStub):
+      def _info(self, *_messages):
+        return None
+
+      def print_error(self, _message):
+        raise AssertionError("valid order should not error")
+
+      def prompt(self, _label, _default=""):
+        return "2,1"
+
+    options = [("First", "one"), ("Second", "two")]
+    self.assertEqual(_confirm_fallback_order(OrderingSetup(0), options, [0, 1]), [1, 0])
 
 
   def test_marcel_soul_replaces_only_the_untouched_upstream_default(self):
