@@ -51,7 +51,7 @@ jobs:
               --workflow ci.yaml \
               --limit 1 \
               --json databaseId,status,conclusion \
-              --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion // \"\")"')
+              --jq '.[0] | [.databaseId, .status, (.conclusion // "pending")] | @tsv')
             if [ -n "$RUN_INFO" ]; then
               break
             fi
@@ -64,7 +64,7 @@ jobs:
             exit 1
           fi
 
-          read -r RUN_ID STATUS CONCLUSION <<< "$RUN_INFO"
+          IFS=$'\t' read -r RUN_ID STATUS CONCLUSION <<< "$RUN_INFO"
 
           echo "Latest CI run: $RUN_ID (status: $STATUS, conclusion: ${CONCLUSION:-pending})"
 
@@ -80,10 +80,10 @@ jobs:
             timeout 2100 gh run watch "$RUN_ID" --repo "$REPO" --interval 15 || true
 
             # Verify it's actually completed now.
-            read -r STATUS CONCLUSION < <(
+            IFS=$'\t' read -r STATUS CONCLUSION < <(
               gh run view "$RUN_ID" --repo "$REPO" \
                 --json status,conclusion \
-                --jq '"\(.status) \(.conclusion // \"\")"'
+                --jq '[.status, (.conclusion // "pending")] | @tsv'
             )
             if [ "$STATUS" != "completed" ]; then
               echo "::error::CI run $RUN_ID is still $STATUS after the wait; the approved review gate was not rerun."
