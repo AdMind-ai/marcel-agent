@@ -2347,10 +2347,9 @@ copy_config_templates() {
     fi
 
     # Create SOUL.md if it doesn't exist (global persona file).
-    # This MUST match DEFAULT_SOUL_MD in marcel_cli/default_soul.py — the
-    # runtime (_ensure_default_soul_md) treats the old comment-only scaffold as
-    # "never customized" and upgrades it to this text on next run, so any drift
-    # here is self-healing, but keep them in sync to avoid a churn on first run.
+    # This exact AdMind-branded installer template is registered as a safe legacy
+    # template in marcel_cli/default_soul.py. The setup wizard can therefore
+    # replace it with the generated identity without treating it as customized.
     if [ ! -f "$MARCEL_HOME/SOUL.md" ]; then
         cat > "$MARCEL_HOME/SOUL.md" << 'SOUL_EOF'
 You are Marcel, an autonomous AI agent framework by AdMind. Upstream: Nous Research. Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default.
