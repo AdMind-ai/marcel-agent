@@ -7,9 +7,10 @@ contract is [`marcel-router-openapi.yaml`](marcel-router-openapi.yaml), OpenAPI
 3.1. The router is a contract and client-routing layer; it does not require
 changes to the imported Marcel runtime.
 
-The hosted Marcel Routing service is available at
-`https://marcel-agent.com/api/v1`. Account management, API keys, usage, and
-billing are available at:
+Hosted Router availability is deployment-specific and is not established by
+this source tree. When a deployment is available, its API base is
+`<deployment>/api/v1`. Account management, API keys, usage, and billing may be
+provided by that deployment at:
 
 - Routing: https://marcel-agent.com/routing
 - Dashboard: https://marcel-agent.com/dashboard
@@ -17,14 +18,15 @@ billing are available at:
 - Usage: https://marcel-agent.com/usage
 - Billing: https://marcel-agent.com/billing
 
-The production contract includes `GET /healthz`, the public `GET /catalog`,
+The documented contract includes `GET /healthz`, the public `GET /catalog`,
 model discovery, chat completions, image generation, realtime voice sessions
 and WebSockets, asynchronous video jobs, embeddings, moderation, reranking,
 text and document translation, and search/data tools. Account, billing, usage,
 and managed-agent operations are also described under `/portal`. Health,
 catalog, and portal authentication behavior follows the OpenAPI document;
 authenticated model and `/v1` operations require the authorization described
-below.
+below. Offline fixture validation covers HTTP behavior; live endpoint and
+realtime WebSocket availability must be checked separately.
 
 ## Authentication and BYOK
 
@@ -65,8 +67,10 @@ silently falling back to another provider.
 Every model identifier is namespaced: `provider/model`, for example
 `openai/gpt-4o-mini`. The slash is required. Unnamespaced aliases are not part
 of the contract. `GET /v1/models` returns only models usable by the caller and adds
-a `marcel` object containing the provider, supported modalities/capabilities,
-and, where known, context/output limits and pricing metadata.
+a canonical `metadata` object containing the model capabilities, routing
+recommendations, cost/speed/quality tiers, and context window. The metadata
+also explicitly advertises `supports_streaming`, `supports_tool_calls`, and
+`supports_json_schema` booleans.
 
 Routing is deterministic and performed by the client: it selects one listed
 namespaced ID based only on locally available inputs (requested capability,
@@ -84,8 +88,11 @@ function tools, `tool_choice`, and `response_format` (`text`, `json_object`, or
 `json_schema`). Tool arguments are JSON encoded in
 `message.tool_calls[].function.arguments`; a client executes them and submits a
 subsequent `tool` message with the matching `tool_call_id`. Capability support
-is advertised in `model.marcel.capabilities`; asking an unsupported model for a
-feature is a `400`, not a degraded response.
+is advertised in `model.metadata.capabilities`, while streaming, tool calls,
+and structured output are governed by their corresponding
+`model.metadata.supports_streaming`, `model.metadata.supports_tool_calls`, and
+`model.metadata.supports_json_schema` booleans. Asking an unsupported model for
+a feature is a `400`, not a degraded response.
 
 With `stream: false` the endpoint returns one `chat.completion` with `usage`
 (`prompt_tokens`, `completion_tokens`, and `total_tokens`). With `stream: true`
