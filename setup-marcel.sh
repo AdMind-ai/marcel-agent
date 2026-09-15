@@ -56,7 +56,9 @@ get_command_link_display_dir() {
 }
 
 echo ""
-echo -e "${CYAN}⚕ Marcel Agent Setup${NC}"
+echo -e "${CYAN}⚕ Marcel Setup${NC}"
+echo -e "${CYAN}  An autonomous AI agent framework by AdMind.${NC}"
+echo -e "${CYAN}  Upstream: Nous Research.${NC}"
 echo ""
 
 # ============================================================================

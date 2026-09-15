@@ -27,12 +27,14 @@ from marcel_cli.config import (
 from marcel_cli.colors import Colors, color
 from marcel_cli.cli_output import print_error, print_info, print_success, print_warning
 from marcel_cli.secret_prompt import masked_secret_prompt
+from marcel_cli.branding import MARCEL_TAGLINE, MARCEL_UPSTREAM_ATTRIBUTION
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 _DOCS_BASE = "https://hermes-agent.nousresearch.com/docs"
+_QUICK_SETUP_PROVIDER_COPY = "Sign in through Nous Portal for managed OAuth access; no API key required."
 _BRACKETED_PASTE_PATTERN = re.compile(r"\x1b\[\s*200~|\x1b\[\s*201~")
 
 
@@ -706,7 +708,7 @@ def _run_full_setup(config: dict, marcel_home, *, is_existing: bool, migration_r
 
 # First-time mode picker: (menu label, setup_quick runner name) — None falls through to Full Setup.
 _FIRST_TIME_MODES = (
-    ("Quick Setup (Nous Portal) — free OAuth login, no API keys, model + tools (recommended)",
+    ("Quick setup",
      "_run_first_time_quick_setup"),
     ("Full setup — configure every provider, tool & option yourself (bring your own keys)", None),
     ("Blank Slate — everything off except the bare minimum; opt in to each capability", "_run_blank_slate_setup"),
@@ -753,6 +755,10 @@ def _run_setup_wizard_impl(args):
                        or get_active_provider() is not None)
     _print_banner("│                Marcel Setup Wizard                     │" if is_marcel
                   else "│             ⚕ Marcel Agent Setup Wizard                │",
+                  f"│  {MARCEL_TAGLINE:<53}│" if is_marcel
+                  else "│  An open source AI agent by Nous Research.              │",
+                  f"│  {MARCEL_UPSTREAM_ATTRIBUTION:<53}│" if is_marcel
+                  else "│                                                         │",
                   "├─────────────────────────────────────────────────────────┤",
                    "│  Let's configure your Marcel installation.             │" if is_marcel
                    else "│  Let's configure your Marcel Agent installation.       │",
@@ -781,6 +787,9 @@ def _run_setup_wizard_impl(args):
             config = load_config()
         # The Marcel entrypoint is already the product-specific setup flow; do not
         # expose the legacy first-time mode picker when invoked as `marcel setup`.
+        if not is_marcel:
+            _info("Quick setup uses the Nous Portal provider —",
+                  _QUICK_SETUP_PROVIDER_COPY, None)
         setup_mode = (
             1
             if is_marcel

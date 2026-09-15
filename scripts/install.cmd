@@ -12,7 +12,7 @@ REM   iex (irm https://raw.githubusercontent.com/AdMind-ai/marcel-agent/main/scr
 REM ============================================================================
 
 echo.
-echo  Marcel Agent Installer
+echo  Marcel Installer
 echo  Launching PowerShell installer...
 echo.
 

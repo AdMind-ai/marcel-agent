@@ -37,7 +37,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
     if command != "marcel":
         setup_parser.add_argument(
             "--portal", action="store_true",
-            help="One-shot Nous Portal setup: log in via OAuth, pick a Nous "
+            help="One-shot setup: sign in through Nous Portal, pick a Nous "
             "model, set Nous as the inference provider, and opt into the Tool "
             "Gateway. Skips the rest of the wizard.")
     setup_parser.set_defaults(func=cmd_setup)
