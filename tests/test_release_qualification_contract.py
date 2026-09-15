@@ -138,6 +138,221 @@ def test_source_archive_is_byte_reproducible_for_the_same_tag(tmp_path):
     assert gzip.decompress(first)
 
 
+def test_checksum_script_rejects_tag_version_mismatch(tmp_path):
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("candidate\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/release-checksums.py"),
+            "--version",
+            "0.21.0",
+            "--tag",
+            "v0.22.0-rc.1",
+            str(artifact),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "does not match version" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "version,tag",
+    [
+        ("01.2.3", "v1.2.3"),
+        ("1.02.3", "v1.2.3"),
+        ("1.2.03", "v1.2.3"),
+        ("1.2.3-01", "v1.2.3-01"),
+    ],
+)
+def test_checksum_script_rejects_non_semver_20_labels(tmp_path, version, tag):
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("candidate\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/release-checksums.py"),
+            "--version",
+            version,
+            "--tag",
+            tag,
+            str(artifact),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "strict SemVer 2.0.0" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "version,tag",
+    [
+        ("1.2.3-1a", "v1.2.3-1a"),
+        ("1.2.3-123abc", "v1.2.3-123abc"),
+        ("1.2.3-01a", "v1.2.3-01a"),
+        ("1.2.3-alpha.123abc+build.7", "v1.2.3-alpha.123abc+build.7"),
+    ],
+)
+def test_checksum_script_accepts_semver_20_nonnumeric_prerelease_identifiers(
+    tmp_path, version, tag
+):
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("candidate\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/release-checksums.py"),
+            "--version",
+            version,
+            "--tag",
+            tag,
+            str(artifact),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_checksum_script_can_label_an_immutable_sha_source(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+    (repo / "source.txt").write_text("immutable source\n")
+    subprocess.run(["git", "-C", str(repo), "add", "source.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "source"], check=True)
+    sha = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    archive = repo / "source.tar.gz"
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/release-checksums.py"),
+            "--version",
+            "1.2.3",
+            "--tag",
+            "v1.2.3",
+            "--source-ref",
+            sha,
+            "--build-source-archive",
+            str(archive),
+        ],
+        cwd=repo,
+        check=True,
+    )
+    with tarfile.open(archive, "r:gz") as source:
+        assert "marcel-agent-1.2.3/source.txt" in source.getnames()
+
+
+def test_checksum_script_rejects_moving_source_ref(tmp_path):
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("candidate\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/release-checksums.py"),
+            "--version",
+            "1.2.3",
+            "--tag",
+            "v1.2.3",
+            "--source-ref",
+            "main",
+            str(artifact),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "full immutable commit SHA" in result.stderr
+
+
+def test_stable_readiness_workflow_is_secret_free_and_evidence_only():
+    workflow = (REPO_ROOT / ".github/workflows/stable-readiness.yml").read_text()
+    reusable = (REPO_ROOT / ".github/workflows/install-e2e-run.yml").read_text()
+    assert "candidate-ref:" in workflow
+    assert "git show-ref --verify --quiet" in workflow
+    assert "full commit SHA" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "sha256sum --check" in workflow
+    assert "cmp " in workflow
+    assert "uv sync --locked" in workflow
+    assert "marcel --version" in workflow
+    assert "import acp_adapter" in workflow
+    assert "route: rollback" in workflow
+    assert "secrets." not in workflow
+    assert "publish" in workflow.lower()
+    assert "MARCEL_NIX_BUILD" not in workflow
+    assert "--no-deps" not in workflow
+    assert "trusted-evidence:" in workflow
+    assert "summary:" in workflow
+    assert "Upload immutable source evidence before smoke" in workflow
+    assert "Download original trusted source evidence" in workflow
+    assert "Reverify and isolate trusted evidence" not in workflow
+    assert "candidate-controlled" in workflow
+    assert "needs: [resolve, trusted-evidence]" in workflow
+    assert "base-sha:" in workflow
+    assert "target-sha:" in workflow
+    trusted_end = workflow.index("\n  smoke:")
+    smoke_end = workflow.index("\n  historical-update-rollback:")
+    summary_start = workflow.index("\n  summary:")
+    trusted = workflow[:trusted_end]
+    smoke = workflow[trusted_end:smoke_end]
+    summary = workflow[summary_start:]
+    assert "actions/upload-artifact" in trusted
+    assert "actions/download-artifact" in smoke
+    assert "actions/upload-artifact" not in smoke
+    assert "release-checksums.py" in trusted
+    assert "release-checksums.py" not in smoke
+    assert "release-checksums.py" not in summary
+    assert "actions/download-artifact" in summary
+    assert "--base-sha" in reusable
+    assert "--target-sha" in reusable
+    assert "bash ./scripts/install.sh --commit" in (
+        REPO_ROOT / "tests/install/install-update-e2e.sh"
+    ).read_text()
+    assert "--force-commit" in (
+        REPO_ROOT / "tests/install/install-update-e2e.sh"
+    ).read_text()
+
+
+def test_update_rollback_harness_is_trusted_and_candidate_is_separate():
+    workflow = (REPO_ROOT / ".github/workflows/install-e2e-run.yml").read_text()
+    harness = (REPO_ROOT / "tests/install/install-update-e2e.sh").read_text()
+    assert "ref: ${{ github.workflow_sha }}" in workflow
+    assert "path: .qualification-trusted" in workflow
+    assert "ref: ${{ inputs.target-sha }}" in workflow
+    assert "path: .qualification-candidate" in workflow
+    assert 'TRUSTED_ROOT: ${{ github.workspace }}/.qualification-trusted' in workflow
+    assert 'CANDIDATE_ROOT: ${{ github.workspace }}/.qualification-candidate' in workflow
+    assert 'cd "$TRUSTED_ROOT"' in workflow
+    assert "MARCEL_E2E_TRUSTED_ROOT" in workflow
+    assert "MARCEL_E2E_CANDIDATE_ROOT" in workflow
+    assert "MARCEL_SANDBOX_SOURCE_ROOT" in harness
+    assert 'TRUSTED_ROOT="${MARCEL_E2E_TRUSTED_ROOT:-$REPO_ROOT}"' in harness
+    assert 'CANDIDATE_ROOT="${MARCEL_E2E_CANDIDATE_ROOT:-$REPO_ROOT}"' in harness
+    assert "candidate checkout must be separate from trusted harness" in harness
+    assert 'tests/install/install-update-e2e.sh "${args[@]}"' in workflow
+
+
+def test_user_facing_support_and_rollback_docs_are_linked():
+    readme = (REPO_ROOT / "README.md").read_text()
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text()
+    assert "[support matrix](docs/support-matrix.md)" in readme
+    assert "[update and rollback guide](docs/update-rollback.md)" in readme
+    assert "stable-readiness.yml" in changelog
+    assert "docs/support-matrix.md" in changelog
+    assert "docs/update-rollback.md" in changelog
+
+
 def test_approved_review_label_rerun_cannot_fail_silently():
     workflow = (REPO_ROOT / ".github/workflows/label-rerun.yml").read_text()
 

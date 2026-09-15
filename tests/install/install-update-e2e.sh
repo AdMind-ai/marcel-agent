@@ -20,12 +20,14 @@
 # If you add a route, give it its own run.
 #
 # Usage:
-#   tests/install/install-update-e2e.sh --route update|installer
-#                                       [--install-ref REF] [--keep]
+#   tests/install/install-update-e2e.sh --route update|installer|rollback
+#                                       [--install-ref REF] [--base-sha SHA]
+#                                       [--target-sha SHA] [--keep]
 #
 #   --route         which update path to exercise (required):
 #                     update     `marcel update`
 #                     installer  re-running the curl one-liner over the checkout
+#                     rollback   update, then return to the historical commit
 #   --install-ref   what to install first; anything git resolves (a branch, a
 #                   tag like v2026.7.7, or a SHA reachable from main).
 #                   Default: refs/heads/main.
@@ -39,6 +41,8 @@ set -euo pipefail
 ROUTE=""
 INSTALL_REF="refs/heads/main"
 KEEP=false
+BASE_SHA=""
+TARGET_SHA=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --route)
@@ -47,18 +51,47 @@ while [ "$#" -gt 0 ]; do
     --install-ref)
       [ "$#" -ge 2 ] || { echo 'error: --install-ref needs a value' >&2; exit 1; }
       INSTALL_REF="$2"; shift 2 ;;
+    --base-sha)
+      [ "$#" -ge 2 ] || { echo 'error: --base-sha needs a value' >&2; exit 1; }
+      BASE_SHA="$2"; shift 2 ;;
+    --target-sha)
+      [ "$#" -ge 2 ] || { echo 'error: --target-sha needs a value' >&2; exit 1; }
+      TARGET_SHA="$2"; shift 2 ;;
     --keep) KEEP=true; shift ;;
     -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 case "$ROUTE" in
-  update|installer) ;;
+# A rollback deliberately starts with the same real update path, then checks
+# that the installed checkout can return to the original historical commit.
+  update|installer|rollback) ;;
   '') echo 'error: --route is required (update or installer)' >&2; exit 1 ;;
-  *) echo "error: unknown route: $ROUTE (want update or installer)" >&2; exit 1 ;;
+  *) echo "error: unknown route: $ROUTE (want update, installer, or rollback)" >&2; exit 1 ;;
 esac
+for named_sha in BASE_SHA TARGET_SHA; do
+  value="${!named_sha}"
+  [[ -z "$value" || "$value" =~ ^[0-9a-f]{40}$ ]] || {
+    flag="${named_sha,,}"
+    flag="${flag//_/-}"
+    echo "error: --$flag must be a lowercase full commit SHA" >&2
+    exit 1
+  }
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The harness is trusted and runs from REPO_ROOT. CI can point the sandbox
+# snapshot at a separate candidate checkout; candidate code never supplies this
+# script or its assertions.
+TRUSTED_ROOT="${MARCEL_E2E_TRUSTED_ROOT:-$REPO_ROOT}"
+[ "$TRUSTED_ROOT" = "$REPO_ROOT" ] \
+  || fail "trusted harness path does not match this script: $TRUSTED_ROOT"
+CANDIDATE_ROOT="${MARCEL_E2E_CANDIDATE_ROOT:-$REPO_ROOT}"
+[ -d "$CANDIDATE_ROOT" ] || fail "candidate checkout does not exist: $CANDIDATE_ROOT"
+[ -e "$CANDIDATE_ROOT/.git" ] || fail "candidate checkout has no Git metadata: $CANDIDATE_ROOT"
+[ -z "${MARCEL_E2E_CANDIDATE_ROOT:-}" ] || [ "$CANDIDATE_ROOT" != "$REPO_ROOT" ] \
+  || fail "candidate checkout must be separate from trusted harness"
+export MARCEL_SANDBOX_SOURCE_ROOT="$CANDIDATE_ROOT"
 cd "$REPO_ROOT"
 
 # Keep sandbox state out of the default .marcel-sandbox so a run never clobbers
@@ -69,7 +102,7 @@ cd "$REPO_ROOT"
 SANDBOX_DIR_NAME=".marcel-sandbox-e2e-$ROUTE"
 export MARCEL_DEV_SANDBOX_DIR="$SANDBOX_DIR_NAME"
 
-SANDBOX_ROOT="$REPO_ROOT/$SANDBOX_DIR_NAME"
+SANDBOX_ROOT="$CANDIDATE_ROOT/$SANDBOX_DIR_NAME"
 INSTALL_DIR="/home/marcel/.marcel/marcel-agent"   # user-level layout (sandbox default)
 FAKE_REMOTE="/work/repos/marcel-agent.git"
 # Only used to fetch an old install.sh for the flag probe below; the sandbox does
@@ -128,9 +161,9 @@ else
   fail 'no usable sandbox: enter the Nix devShell (for `sandbox`) or install bubblewrap'
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+if [ -n "$(git -C "$CANDIDATE_ROOT" status --porcelain)" ]; then
   printf '\033[1;31m✗ working tree is dirty:\033[0m\n' >&2
-  git status --porcelain | sed 's/^/    /' >&2
+  git -C "$CANDIDATE_ROOT" status --porcelain | sed 's/^/    /' >&2
   fail 'Every sandbox invocation re-snapshots the working copy into a new
   fake-main commit, so the update target would move mid-run. Commit or stash
   first. (If a path above is build or log output, it needs gitignoring or to
@@ -225,7 +258,15 @@ in_sandbox() { "${SANDBOX[@]}" --persistent bash -lc "$1"; }
 
 # fake main's SHA is read fresh whenever it is needed, never cached across a
 # sandbox invocation: each invocation re-derives it from the worktree.
-sandbox_target() { in_sandbox "git --git-dir=$FAKE_REMOTE rev-parse main" | tr -d '[:space:]'; }
+sandbox_target() {
+  if [ -n "$TARGET_SHA" ]; then
+    in_sandbox "git --git-dir=$FAKE_REMOTE cat-file -e '$TARGET_SHA^{commit}'" \
+      || fail "explicit update target $TARGET_SHA is not present in the sandbox remote"
+    printf '%s\n' "$TARGET_SHA"
+  else
+    in_sandbox "git --git-dir=$FAKE_REMOTE rev-parse main" | tr -d '[:space:]'
+  fi
+}
 sandbox_head()   { in_sandbox "cd $INSTALL_DIR && git rev-parse HEAD" | tr -d '[:space:]'; }
 
 require_landed_on_target() {
@@ -233,6 +274,13 @@ require_landed_on_target() {
   head="$(sandbox_head)"
   target="$(sandbox_target)"
   [ "$head" = "$target" ] || fail "$what left HEAD at $head, wanted $target"
+  ok "$what landed on ${head:0:12}"
+}
+
+require_landed_on_ref() {
+  local what="$1" expected="$2" head
+  head="$(sandbox_head)"
+  [ "$head" = "$expected" ] || fail "$what left HEAD at $head, wanted $expected"
   ok "$what landed on ${head:0:12}"
 }
 
@@ -253,6 +301,8 @@ install_in_sandbox "install of upstream $INSTALL_REF" "$INSTALL_REF" install
 BASE="$(sandbox_head)"
 TARGET="$(sandbox_target)"
 [ -n "$BASE" ] || fail "could not read the installed commit"
+[ -z "$BASE_SHA" ] || [ "$BASE" = "$BASE_SHA" ] \
+  || fail "historical install landed on $BASE, wanted $BASE_SHA"
 [ "$BASE" != "$TARGET" ] \
   || fail "install landed on the update target ($BASE); base and target must differ"
 ok "installed ${BASE:0:12}; update target is ${TARGET:0:12}"
@@ -284,6 +334,30 @@ case "$ROUTE" in
     install_in_sandbox 'installer re-run' '' reinstall
     require_landed_on_target 'installer re-run'
     require_marcel_works 'after installer re-run'
+    ;;
+  rollback)
+    step 'ROUTE: update, then rollback to the historical commit'
+    if update_supports --yes; then
+      update_cmd="marcel update --yes"
+    else
+      update_cmd="marcel update </dev/null"
+    fi
+    if ! in_sandbox "cd $INSTALL_DIR && $update_cmd"; then
+      collect_sandbox_logs rollback-update
+      fail "marcel update failed before rollback ($update_cmd)"
+    fi
+    require_landed_on_target 'rollback route update'
+    require_marcel_works 'after rollback route update'
+    # Use the supported installer/bootstrap path for rollback as well.  The
+    # explicit commit prevents a moving branch from being re-resolved, while
+    # the normal installer dependency stage (including its locked uv sync)
+    # repairs the venv for the old code.
+    if ! in_sandbox "cd $INSTALL_DIR && bash ./scripts/install.sh --commit '$BASE' --force-commit --non-interactive --skip-setup --skip-browser"; then
+      collect_sandbox_logs rollback
+      fail "supported installer rollback to historical commit $BASE failed"
+    fi
+    require_landed_on_ref 'historical rollback' "$BASE"
+    require_marcel_works 'after historical rollback'
     ;;
 esac
 

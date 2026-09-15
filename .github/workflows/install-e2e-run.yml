@@ -1,11 +1,12 @@
 name: Install & Update E2E (reusable)
 
-# Runs ONE update route against ONE starting commit, in the dev sandbox, with a
+# Runs ONE update or rollback route against ONE starting commit, in the dev sandbox, with a
 # real install (uv, a managed Python, Node, the venv) behind it.
 #
 # Reusable so callers can fan out over the combinations that matter -- update
 # from the tip vs. from an older release, `marcel update` vs. re-running the
-# installer -- without duplicating the runner setup. Each leg is independent:
+# installer, and returning to the historical commit -- without duplicating the
+# runner setup. Each leg is independent:
 # its own sandbox, its own install, nothing rewound or shared.
 #
 # Call it:
@@ -16,12 +17,13 @@ name: Install & Update E2E (reusable)
 #       with:
 #         route: update
 #         install-ref: refs/heads/main
+#         target-sha: 0123456789abcdef0123456789abcdef01234567
 
 on:
   workflow_call:
     inputs:
       route:
-        description: 'Update path to exercise: update (marcel update) or installer (re-run install.sh).'
+        description: 'Path to exercise: update, installer, or rollback (update then return to the starting commit).'
         required: true
         type: string
       install-ref:
@@ -29,6 +31,15 @@ on:
         required: false
         type: string
         default: refs/heads/main
+      base-sha:
+        description: 'Expected immutable SHA after the initial install (used by rollback qualification).'
+        required: false
+        type: string
+        default: ''
+      target-sha:
+        description: 'Explicit immutable candidate update target SHA.'
+        required: true
+        type: string
       runner:
         description: 'Runner label.'
         required: false
@@ -50,11 +61,23 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:
-      # Full history: the sandbox fetches the starting commit and the test
-      # compares against this commit, so a shallow clone is not enough.
+      # This checkout owns the harness and every verifier/assertion. It must
+      # not be replaced by candidate source.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.workflow_sha }}
+          path: .qualification-trusted
           fetch-depth: 0
+          persist-credentials: false
+
+      # The candidate is deliberately a sibling checkout. The trusted harness
+      # points the sandbox source root at this path explicitly.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target-sha }}
+          path: .qualification-candidate
+          fetch-depth: 0
+          persist-credentials: false
 
       # bubblewrap + slirp4netns are what the sandbox is built on; util-linux
       # supplies the `unshare` that builds the multi-uid userns for the
@@ -82,18 +105,29 @@ jobs:
           grep "^$(id -un):" /etc/subuid /etc/subgid || echo "  (none — sandbox will say so)"
 
       - name: Run install + update E2E
+        env:
+          E2E_ROUTE: ${{ inputs.route }}
+          E2E_INSTALL_REF: ${{ inputs.install-ref }}
+          E2E_BASE_SHA: ${{ inputs.base-sha }}
+          E2E_TARGET_SHA: ${{ inputs.target-sha }}
+          MARCEL_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
+          TRUSTED_ROOT: ${{ github.workspace }}/.qualification-trusted
+          CANDIDATE_ROOT: ${{ github.workspace }}/.qualification-candidate
         run: |
           set -euo pipefail
-          tests/install/install-update-e2e.sh \
-            --route '${{ inputs.route }}' \
-            --install-ref '${{ inputs.install-ref }}'
-        env:
-          # Outside the workspace on purpose: the script creates this directory
-          # up front, and an untracked dir inside the repo makes the worktree
-          # dirty -- which dev-sandbox reacts to by snapshotting the working
-          # copy into a fresh fake-main commit on every invocation, moving the
-          # update target mid-run.
-          MARCEL_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
+          case "$E2E_ROUTE" in
+            update|installer|rollback) ;;
+            *) echo "unsupported E2E route: $E2E_ROUTE" >&2; exit 1 ;;
+          esac
+          [[ -z "$E2E_BASE_SHA" || "$E2E_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ -z "$E2E_TARGET_SHA" || "$E2E_TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          args=(--route "$E2E_ROUTE" --install-ref "$E2E_INSTALL_REF")
+          [ -z "$E2E_BASE_SHA" ] || args+=(--base-sha "$E2E_BASE_SHA")
+          [ -z "$E2E_TARGET_SHA" ] || args+=(--target-sha "$E2E_TARGET_SHA")
+          cd "$TRUSTED_ROOT"
+          MARCEL_E2E_TRUSTED_ROOT="$TRUSTED_ROOT" \
+            MARCEL_E2E_CANDIDATE_ROOT="$CANDIDATE_ROOT" \
+            tests/install/install-update-e2e.sh "${args[@]}"
 
       # Artifact names cannot contain '/', and install-ref may be a full ref
       # like refs/heads/main. GitHub Actions expressions have no string-replace
@@ -102,11 +136,15 @@ jobs:
       - name: Build artifact name
         if: always()
         id: artifact
+        env:
+          E2E_ROUTE: ${{ inputs.route }}
+          E2E_INSTALL_REF: ${{ inputs.install-ref }}
         run: |
           set -euo pipefail
-          safe_ref='${{ inputs.install-ref }}'
+          safe_ref="$E2E_INSTALL_REF"
           safe_ref="${safe_ref//\//-}"
-          echo "name=install-e2e-${{ inputs.route }}-${safe_ref}" >> "$GITHUB_OUTPUT"
+          safe_ref="${safe_ref//[^A-Za-z0-9_.-]/-}"
+          echo "name=install-e2e-${E2E_ROUTE}-${safe_ref}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
 
       # The installer's own transcripts say far more than the assertion that
       # tripped when a real install breaks.
