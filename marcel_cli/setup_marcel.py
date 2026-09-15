@@ -1035,7 +1035,8 @@ def _direct_model_capabilities(provider: str, model: str) -> frozenset[str]:
         prefix, separator, remainder = bare_model.partition("/")
         if separator and _direct_provider_for_model(bare_model) == provider:
             bare_model = remainder
-        metadata = get_model_capabilities(provider=models_dev_provider, model=bare_model)
+        metadata = get_model_capabilities(
+            provider=models_dev_provider, model=bare_model, allow_network=True)
     except Exception:
         return frozenset()
     if metadata is None:
@@ -1080,7 +1081,11 @@ def _choose_model(
     catalog = _catalog_for_activity(activity, live_models, provider=provider)
     if not catalog:
         setup.print_error(
-            "No compatible model with the required image/vision capability is available."
+            (
+                f"No direct vision-capable chat model is available for {provider}."
+                if activity == "vision" and provider else
+                "No compatible model with the required image/vision capability is available."
+            )
             if _is_image_generation_activity(activity) or activity == "vision" else
             f"No model is available for the {activity or 'general'} route."
         )

@@ -234,6 +234,72 @@ class MarcelSetupTests(unittest.TestCase):
         ],
     )
 
+  def test_scripted_router_flow_validates_catalog_before_model_and_finishes_zero_workers(self):
+    events = []
+
+    def choose(label, choices, _default=0, **_kwargs):
+      events.append(label)
+      if label == "Connection":
+        return 0
+      return 0
+
+    def checklist(label, choices, pre_selected=None):
+      events.append(label)
+      return [] if label == "Choose fallback models (used in this order)" else list(pre_selected or [])
+
+    def text_prompt(label, default=None, password=False):
+      events.append(label)
+      if label == "Agent name":
+        return "RouterAgent"
+      if label == "Marcel Router base URL":
+        return "https://marcel-agent.com/api/v1"
+      if label == "Marcel Routing API key":
+        return "router-test-value"
+      return default or ""
+
+    def yes_no(label, default=True):
+      events.append(label)
+      return False
+
+    live = [{
+      "id": "vendor/chat",
+      "owned_by": "vendor",
+      "metadata": {"capabilities": ["chat", "tools"]},
+    }]
+
+    def discover(url, key):
+      events.append("Router catalog discovered")
+      _validate_router_url(url)
+      self.assertEqual(key, "router-test-value")
+      return True, "catalog ready", live
+
+    with (
+        patch.object(setup_cli_module, "prompt_choice", side_effect=choose),
+        patch.object(setup_cli_module, "prompt_checklist", side_effect=checklist),
+        patch.object(setup_cli_module, "prompt", side_effect=text_prompt),
+        patch.object(setup_cli_module, "prompt_yes_no", side_effect=yes_no),
+        patch.object(setup_cli_module, "get_env_value", return_value=None),
+        patch.object(setup_cli_module, "save_env_value"),
+        patch.object(setup_cli_module, "save_config"),
+        patch.object(setup_cli_module, "print_header"),
+        patch.object(setup_cli_module, "print_success"),
+        patch.object(setup_cli_module, "print_error"),
+        patch.object(setup_cli_module, "_info",
+                     side_effect=lambda *args: events.append(str(args[0]))),
+        patch("marcel_cli.setup_marcel._discover_marcel_router_models", side_effect=discover),
+        patch("marcel_cli.setup_tts._setup_tts_provider"),
+        patch("marcel_cli.setup_marcel._choose_voice_model"),
+        patch("marcel_cli.setup_marcel._choose_image_provider"),
+        patch("marcel_cli.setup_marcel.ensure_marcel_soul"),
+        patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"),
+    ):
+      config = {}
+      setup_marcel(config)
+
+    self.assertLess(events.index("Router catalog discovered"), events.index("Orchestrator model"))
+    self.assertLess(events.index("Main agent configured:"), events.index("Add a sub-agent?"))
+    self.assertEqual(config["delegation"]["workers"], {})
+
   def test_scripted_direct_vision_flow_scopes_worker_model_and_runs_after_main_summary(self):
     events = []
     saved_env = []
@@ -806,15 +872,42 @@ class MarcelSetupTests(unittest.TestCase):
       supports_vision = True
       supports_tools = True
 
-    def lookup(*, provider, model):
-      calls.append((provider, model))
+    def lookup(*, provider, model, allow_network=False):
+      calls.append((provider, model, allow_network))
       return Capabilities()
 
     with patch("agent.models_dev.get_model_capabilities", side_effect=lookup):
       _direct_vision_catalog("openai-api")
     self.assertTrue(calls)
-    self.assertTrue(all(provider == "openai" for provider, _ in calls))
-    self.assertTrue(all("/" not in model for _, model in calls))
+    self.assertTrue(all(provider == "openai" for provider, _, _ in calls))
+    self.assertTrue(all("/" not in model for _, model, _ in calls))
+    self.assertTrue(all(allow_network for _, _, allow_network in calls))
+
+  def test_direct_vision_empty_cache_boundary_loads_network_registry(self):
+    from agent import models_dev
+
+    _direct_model_capabilities.cache_clear()
+    openai_models = {
+      model_id.split("/", 1)[1]: {
+        "tool_call": True,
+        "modalities": {"input": ["text", "image"]},
+      }
+      for _, model_id in MODEL_CHOICES if model_id.startswith("openai/")
+    }
+    fetches = []
+
+    def fetch_network_registry():
+      fetches.append(True)
+      return {"openai": {"models": openai_models}}
+
+    with (
+        patch.object(models_dev, "_models_dev_cache", {}),
+        patch.object(models_dev, "_models_dev_retry_after", 0),
+        patch.object(models_dev, "fetch_models_dev", side_effect=fetch_network_registry),
+    ):
+      catalog = _direct_vision_catalog("openai-api")
+    self.assertTrue(fetches)
+    self.assertTrue(catalog)
 
   def test_registered_image_model_keeps_its_provider(self):
     self.assertEqual(
