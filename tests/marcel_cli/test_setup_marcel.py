@@ -21,6 +21,8 @@ from marcel_cli.setup_marcel import (
     _choose_concurrency,
     _choose_memory_interval,
     _fallback_catalog,
+    _generation_catalog,
+    _normalize_router_models,
     _catalog_for_activity,
     _confirm_fallback_order,
     _connect_required_direct_providers,
@@ -32,9 +34,13 @@ from marcel_cli.setup_marcel import (
     normalize_account,
     normalize_agent_name,
     _prompt_agent_name,
+    _validate_custom_endpoint_url,
+    _validate_router_url,
+    _mode_connection_defaults,
     normalize_secret_reference,
     setup_marcel,
 )
+from marcel_cli.fallback_config import get_fallback_chain
 
 
 class _SetupStub:
@@ -364,9 +370,9 @@ class MarcelSetupTests(unittest.TestCase):
     setup = _SetupStub(1)
     selected = _choose_model(
         setup, "Sub-agent model for image", allow_automatic=True, activity="image")
-    self.assertEqual(selected, ACTIVITY_MODEL_CHOICES["image"][0][1])
+    self.assertIn(selected, [model_id for _, model_id in _generation_catalog()])
     self.assertTrue(any("generation" in choice.lower() for choice in setup.seen_choices))
-    self.assertTrue(any("vision/reasoning" in choice.lower() for choice in setup.seen_choices))
+    self.assertFalse(any("vision/reasoning" in choice.lower() for choice in setup.seen_choices))
     self.assertFalse(any("Claude Opus 5" in choice for choice in setup.seen_choices))
 
 
@@ -415,13 +421,14 @@ class MarcelSetupTests(unittest.TestCase):
     })
     self.assertEqual(config["model"], {
         "provider": "openai-api", "default": "gpt-5.6-terra"})
-    self.assertEqual(config["fallback_model"], [{
+    self.assertEqual(config["fallback_providers"], [{
         "provider": "gemini",
         "model": "gemini-3.7-flash",
         "key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "api_mode": "gemini",
     }])
+    self.assertNotIn("fallback_model", config)
 
 
   def test_media_fallbacks_stay_capability_specific(self):
@@ -542,7 +549,85 @@ class MarcelSetupTests(unittest.TestCase):
     labels = [label for label, _ in catalog]
     self.assertIn("Image generation/editing — vendor/generator", labels)
     self.assertIn("Image analysis (vision) — vendor/vision", labels)
-    self.assertIn("capability metadata unavailable", labels[-1])
+    self.assertNotIn("vendor/unknown", [model_id for _, model_id in catalog])
+
+  def test_live_router_metadata_keeps_provider_owner_and_preview(self):
+    entries = _normalize_router_models({
+      "data": [{
+        "id": "vendor/vision-preview",
+        "owned_by": "vendor",
+        "preview": True,
+        "metadata": {"capabilities": ["vision"]},
+      }],
+    })
+    self.assertEqual(entries[0]["owned_by"], "vendor")
+    self.assertTrue(entries[0]["preview"])
+
+  def test_name_rejects_category_c_before_whitespace_normalization(self):
+    for value in ("a\nb", "a\rb", "a\tb", "a\033b", "a\u202eb", "a\u200bb"):
+      with self.assertRaises(ValueError):
+        normalize_agent_name(value)
+
+  def test_endpoint_transport_policy_is_mode_specific(self):
+    with self.assertRaises(ValueError):
+      _validate_router_url("http://router.example.test/v1")
+    with self.assertRaises(ValueError):
+      _validate_custom_endpoint_url("http://router.example.test/v1")
+    self.assertEqual(
+      _validate_custom_endpoint_url("http://127.0.0.1:8080/v1"),
+      "http://127.0.0.1:8080/v1",
+    )
+
+  def test_switching_connection_modes_does_not_reuse_router_secret_or_host(self):
+    router = {
+      "mode": "marcel_router",
+      "base_url": "https://router.example.test/v1",
+      "key_env": "MARCEL_ROUTER_API_KEY",
+    }
+    self.assertEqual(
+      _mode_connection_defaults(router, "marcel_router", "custom_endpoint"),
+      ("", "MARCEL_CUSTOM_API_KEY"),
+    )
+    self.assertEqual(
+      _mode_connection_defaults(router, "marcel_router", "direct_provider"),
+      ("", ""),
+    )
+
+  def test_generation_catalog_excludes_router_vision_and_unknown_entries(self):
+    live = [
+      {"id": "vision", "metadata": {"capabilities": ["vision"]}},
+      {"id": "unknown", "metadata": {"capabilities": ["chat"]}},
+      {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
+    ]
+    self.assertEqual(
+      [model_id for _, model_id in _generation_catalog(live)],
+      ["generator"],
+    )
+
+  def test_fallback_runtime_schema_replaces_legacy_key_in_order(self):
+    config = {
+      "fallback_model": {"provider": "legacy", "model": "stale"},
+    }
+    apply_marcel_config(config, {
+      "agent_name": "TestAgent",
+      "router_mode": "marcel_router",
+      "base_url": "https://marcel-agent.com/api/v1",
+      "api_key_ref": "MARCEL_ROUTER_API_KEY",
+      "orchestrator_model": "demo/primary",
+      "orchestrator_fallback_models": ["demo/second", "demo/first"],
+      "workers": [],
+      "accounts": [],
+    })
+    self.assertEqual(
+      [item["model"] for item in config["fallback_providers"]],
+      ["demo/second", "demo/first"],
+    )
+    self.assertNotIn("stale", str(config))
+    self.assertNotIn("fallback_model", config)
+    self.assertEqual(
+      [item["model"] for item in get_fallback_chain(config)],
+      ["demo/second", "demo/first"],
+    )
 
   def test_fallback_order_editor_reorders_selected_models(self):
     class OrderingSetup(_SetupStub):
