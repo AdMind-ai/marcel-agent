@@ -1,5 +1,7 @@
 """Focused contract tests for Marcel's YAML-safe setup builders."""
 
+from contextlib import ExitStack
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -1076,3 +1078,507 @@ class MarcelSetupTests(unittest.TestCase):
       with patch("marcel_cli.config.get_marcel_home", return_value=home):
         self.assertFalse(ensure_marcel_soul())
       self.assertEqual(soul.read_text(encoding="utf-8"), "My custom personality")
+
+
+class MarcelSetupIntegrationTests(unittest.TestCase):
+  """Run the real wizard orchestration against an isolated Marcel home.
+
+  The prompt and network seams are replaced, but catalog filtering, config
+  application, YAML persistence, and reload all remain real.
+  """
+
+  def _run_setup(
+      self, home, choose, checklist, text, yes_no, *,
+      discover=None, models_dev_fixture=None, initial_config=None,
+  ):
+    from agent import models_dev
+    from marcel_cli import config as config_module
+
+    events = []
+
+    def scripted_choice(label, choices, default=0, **kwargs):
+      events.append(label)
+      return choose(label, choices, default, **kwargs)
+
+    def scripted_checklist(label, choices, pre_selected=None):
+      events.append(label)
+      return checklist(label, choices, list(pre_selected or []))
+
+    def scripted_text(label, default="", password=False):
+      events.append(label)
+      return text(label, default, password)
+
+    def scripted_yes_no(label, default=True):
+      events.append(label)
+      return yes_no(label, default)
+
+    with patch.dict(os.environ, {"MARCEL_HOME": str(home)}, clear=False):
+      with ExitStack() as stack:
+        stack.enter_context(patch.object(setup_cli_module, "prompt_choice",
+                                         side_effect=scripted_choice))
+        stack.enter_context(patch.object(setup_cli_module, "prompt_checklist",
+                                         side_effect=scripted_checklist))
+        stack.enter_context(patch.object(setup_cli_module, "prompt",
+                                         side_effect=scripted_text))
+        stack.enter_context(patch.object(setup_cli_module, "prompt_yes_no",
+                                         side_effect=scripted_yes_no))
+        stack.enter_context(patch.object(setup_cli_module, "_info",
+                                         side_effect=lambda *lines: events.append(
+                                           lines[0] if lines else "")))
+        stack.enter_context(patch.object(setup_cli_module, "print_header"))
+        stack.enter_context(patch.object(setup_cli_module, "print_success"))
+        stack.enter_context(patch.object(setup_cli_module, "print_error"))
+        stack.enter_context(patch("marcel_cli.setup_tts._setup_tts_provider"))
+        stack.enter_context(patch("marcel_cli.setup_marcel._choose_voice_model"))
+        stack.enter_context(patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"))
+        if discover is not None:
+          stack.enter_context(patch(
+              "marcel_cli.setup_marcel._discover_marcel_router_models",
+              side_effect=discover))
+        if models_dev_fixture is not None:
+          stack.enter_context(patch.object(models_dev, "_models_dev_cache", {}))
+          stack.enter_context(patch.object(models_dev, "_models_dev_retry_after", 0))
+          stack.enter_context(patch.object(
+              models_dev, "fetch_models_dev", side_effect=models_dev_fixture))
+        config = initial_config if initial_config is not None else {}
+        setup_marcel(config)
+        reloaded = config_module.load_config()
+    return config, reloaded, events
+
+  @staticmethod
+  def _common_text(label, default="", _password=False):
+    if label == "Agent name":
+      return "Integration Marcel"
+    if label == "Marcel Router base URL":
+      return "https://router.integration.test/api/v1"
+    if label == "Marcel Routing API key":
+      return "router-integration-key"
+    if "API key" in label:
+      return "provider-integration-key"
+    if label == "Sub-agent name":
+      return "Specialist"
+    return default or ""
+
+  def test_clean_router_setup_persists_live_main_route_and_reload(self):
+    with TemporaryDirectory() as tmp:
+      home = Path(tmp)
+      live = [{
+          "id": "vendor/chat",
+          "provider": "vendor",
+          "owned_by": "vendor",
+          "metadata": {"capabilities": ["chat", "tools"]},
+      }, {
+          "id": "vendor/backup-a",
+          "provider": "vendor",
+          "owned_by": "vendor",
+          "metadata": {"capabilities": ["chat", "tools"]},
+      }, {
+          "id": "vendor/backup-b",
+          "provider": "vendor",
+          "owned_by": "vendor",
+          "metadata": {"capabilities": ["chat", "tools"]},
+      }]
+      discovery_events = []
+      ordering = []
+
+      def discover(url, key):
+        discovery_events.append((url, key))
+        ordering.append("catalog")
+        _validate_router_url(url)
+        self.assertEqual(key, "router-integration-key")
+        return True, "catalog ready", live
+
+      def choose(label, choices, default, **_kwargs):
+        if label == "Connection":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Marcel Router")
+          )
+        if label == "Orchestrator model":
+          ordering.append("model")
+          return next(
+              index for index, choice in enumerate(choices)
+              if "[vendor/chat]" in choice
+          )
+        if label in {
+            "Which image service should the main agent use by default?",
+        }:
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("FAL.ai")
+          )
+        if label == "Image generation/editing model":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("fal /")
+          )
+        return default
+
+      def checklist(label, _choices, pre_selected):
+        if label == "Choose fallback models (used in this order)":
+          return [1, 0]
+        return pre_selected
+
+      def yes_no(_label, _default):
+        return False
+
+      config, reloaded, events = self._run_setup(
+          home, choose, checklist, self._common_text, yes_no, discover=discover)
+
+      self.assertEqual(discovery_events, [
+          ("https://router.integration.test/api/v1", "router-integration-key"),
+      ])
+      self.assertEqual(ordering, ["catalog", "model"])
+      self.assertLess(events.index("Main agent configured:"),
+                      events.index("Add a sub-agent?"))
+      self.assertNotIn("Sub-agent name", events)
+      self.assertEqual(reloaded["marcel"]["router"]["base_url"],
+                       "https://router.integration.test/api/v1")
+      self.assertEqual(reloaded["marcel"]["router"]["key_env"], "MARCEL_ROUTER_API_KEY")
+      self.assertEqual(reloaded["marcel"]["orchestrator"], {
+          "name": "Integration Marcel",
+          "model": "vendor/chat",
+          "provider": "marcel",
+          "fallback_models": ["vendor/backup-b", "vendor/backup-a"],
+      })
+      self.assertEqual(reloaded["model"], {"provider": "marcel", "default": "vendor/chat"})
+      self.assertEqual(
+          [entry["model"] for entry in reloaded["fallback_providers"]],
+          ["vendor/backup-b", "vendor/backup-a"],
+      )
+      self.assertEqual(
+          reloaded["marcel"]["routing"]["available_models"],
+          ["vendor/chat", "vendor/backup-b", "vendor/backup-a"],
+      )
+      self.assertEqual(reloaded["image_gen"]["provider"], "fal")
+      self.assertTrue(reloaded["image_gen"]["model"])
+      self.assertEqual(reloaded["delegation"]["workers"], {})
+      self.assertEqual(
+          config["marcel"]["routing"]["available_models"],
+          reloaded["marcel"]["routing"]["available_models"],
+      )
+
+  def test_clean_router_image_worker_uses_chat_llm_and_global_media_service(self):
+    with TemporaryDirectory() as tmp:
+      home = Path(tmp)
+      live = [
+          {
+              "id": "vendor/chat",
+              "provider": "vendor",
+              "metadata": {"capabilities": ["chat", "tools"]},
+          },
+          {
+              "id": "vendor/chat-backup",
+              "provider": "vendor",
+              "metadata": {"capabilities": ["chat", "tools"]},
+          },
+          {
+              "id": "vendor/image",
+              "provider": "vendor",
+              "metadata": {"capabilities": ["image_generation"]},
+          },
+      ]
+
+      def discover(url, key):
+        _validate_router_url(url)
+        self.assertEqual(key, "router-integration-key")
+        return True, "catalog ready", live
+
+      fallback_calls = 0
+      worker_model_choices = []
+      selected_worker_model = {"id": ""}
+
+      def choose(label, choices, default, **_kwargs):
+        if label == "Connection":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Marcel Router")
+          )
+        if label == "Orchestrator model":
+          return next(
+              index for index, choice in enumerate(choices)
+              if "[vendor/chat]" in choice
+          )
+        if label == "Sub-agent activity":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Image generation worker")
+          )
+        if label.startswith("Sub-agent model for "):
+          worker_model_choices[:] = list(choices)
+          selected = next(
+              index for index, choice in enumerate(choices)
+              if "[vendor/chat]" in choice
+          )
+          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          return selected
+        if label in {
+            "Which image service should the main agent use by default?",
+        }:
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("FAL.ai")
+          )
+        if label == "Image generation/editing model":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("fal /")
+          )
+        return default
+
+      def checklist(label, _choices, pre_selected):
+        nonlocal fallback_calls
+        if label == "Choose fallback models (used in this order)":
+          fallback_calls += 1
+          return [0] if fallback_calls == 1 else []
+        return pre_selected
+
+      worker_requested = {"value": False}
+
+      def yes_no(label, _default):
+        if label == "Add a sub-agent?":
+          if not worker_requested["value"]:
+            worker_requested["value"] = True
+            return True
+          return False
+        return False
+
+      config, reloaded, events = self._run_setup(
+          home, choose, checklist, self._common_text, yes_no, discover=discover)
+
+      worker = reloaded["delegation"]["workers"]["specialist"]
+      self.assertEqual(worker["provider"], "marcel")
+      self.assertEqual(worker["model"], selected_worker_model["id"])
+      self.assertIn("vendor/chat", selected_worker_model["id"])
+      self.assertTrue(worker_model_choices)
+      self.assertTrue(any("[vendor/chat]" in choice for choice in worker_model_choices))
+      self.assertFalse(any("vendor/image" in choice for choice in worker_model_choices))
+      self.assertEqual(worker.get("fallback_models", []), [])
+      self.assertEqual(worker["image_service"], "global")
+      self.assertIn("image_gen", worker["toolsets"])
+      self.assertNotIn("vendor/image", str(worker))
+      self.assertNotIn("vendor/image", str(reloaded["marcel"]["orchestrator"]["fallback_models"]))
+      self.assertEqual(reloaded["image_gen"]["provider"], "fal")
+      self.assertTrue(reloaded["image_gen"]["model"])
+      self.assertEqual(
+          config["delegation"]["workers"]["specialist"]["model"],
+          worker["model"],
+      )
+
+  def test_direct_vision_worker_uses_empty_cache_network_catalog_boundary(self):
+    from agent import models_dev
+
+    with TemporaryDirectory() as tmp:
+      home = Path(tmp)
+      _direct_model_capabilities.cache_clear()
+      fetch_calls = []
+      openai_models = {
+          model_id.split("/", 1)[1]: {
+              "tool_call": True,
+              "modalities": {"input": ["text", "image"]},
+          }
+          for _, model_id in MODEL_CHOICES if model_id.startswith("openai/")
+      }
+
+      def fetch_network_registry(*_args, **_kwargs):
+        allow_network = _kwargs.get("allow_network", True)
+        fetch_calls.append({
+            "allow_network": allow_network,
+            "cache_empty": not bool(models_dev._models_dev_cache),
+        })
+        if not allow_network:
+          return {}
+        return {"openai": {"models": openai_models}}
+
+      worker_model_choices = []
+      selected_worker_model = {"id": ""}
+      selected_main_model = {"id": ""}
+
+      def choose(label, choices, default, **_kwargs):
+        if label == "Connection":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Provider API keys")
+          )
+        if label == "API provider":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice == "OpenAI"
+          )
+        if label == "Orchestrator model":
+          selected = next(
+              index for index, choice in enumerate(choices)
+              if "[openai/gpt-6-astra]" in choice
+          )
+          selected_main_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          return selected
+        if label == "Sub-agent activity":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Vision worker")
+          )
+        if label.startswith("Sub-agent model for "):
+          worker_model_choices[:] = list(choices)
+          selected = next(
+              index for index, choice in enumerate(choices)
+              if "[openai/" in choice
+          )
+          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          return selected
+        if label in {
+            "Which image service should the main agent use by default?",
+        }:
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("FAL.ai")
+          )
+        if label == "Image generation/editing model":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("fal /")
+          )
+        return default
+
+      def checklist(label, _choices, pre_selected):
+        if label == "Choose fallback models (used in this order)":
+          return []
+        return pre_selected
+
+      worker_requested = {"value": False}
+
+      def yes_no(label, _default):
+        if label == "Add a sub-agent?":
+          if not worker_requested["value"]:
+            worker_requested["value"] = True
+            return True
+          return False
+        return False
+
+      config, reloaded, events = self._run_setup(
+          home, choose, checklist, self._common_text, yes_no,
+          models_dev_fixture=fetch_network_registry)
+
+      worker = reloaded["delegation"]["workers"]["specialist"]
+      self.assertTrue(fetch_calls)
+      self.assertTrue(all(call["allow_network"] is True for call in fetch_calls))
+      self.assertTrue(fetch_calls[0]["cache_empty"])
+      self.assertEqual(reloaded["model"], {
+          "provider": "openai-api",
+          "default": selected_main_model["id"].split("/", 1)[1],
+      })
+      self.assertTrue(selected_main_model["id"].startswith("openai/"))
+      self.assertEqual(worker["provider"], "openai-api")
+      self.assertEqual(worker["model"], selected_worker_model["id"])
+      self.assertTrue(worker_model_choices)
+      self.assertTrue(any("[openai/" in choice for choice in worker_model_choices))
+      self.assertIn("vision", worker["toolsets"])
+      self.assertNotIn("fal", worker["provider"])
+      self.assertEqual(config["delegation"]["workers"]["specialist"]["model"],
+                       worker["model"])
+
+  def test_reconfigure_preserves_custom_order_once_and_requires_new_router_key(self):
+    from marcel_cli import config as config_module
+
+    with TemporaryDirectory() as tmp:
+      home = Path(tmp)
+      initial_values = {
+          "agent_name": "Integration Marcel",
+          "router_mode": "marcel_router",
+          "base_url": "https://old-router.integration.test/api/v1",
+          "api_key_ref": "MARCEL_ROUTER_API_KEY",
+          "orchestrator_model": "custom/primary",
+          "orchestrator_fallback_models": ["custom/backup-b", "custom/backup-a"],
+          "available_models": [
+              "custom/primary", "custom/backup-b", "custom/backup-a",
+          ],
+          "live_model_entries": [
+              {"id": "custom/primary", "metadata": {"capabilities": ["chat", "tools"]}},
+              {"id": "custom/backup-b", "metadata": {"capabilities": ["chat", "tools"]}},
+              {"id": "custom/backup-a", "metadata": {"capabilities": ["chat", "tools"]}},
+          ],
+          "workers": [],
+          "accounts": [],
+      }
+      initial = apply_marcel_config({}, initial_values)
+      initial["image_gen"] = {"provider": "fal", "model": "fal-ai/test-image"}
+
+      def discover(url, key):
+        self.assertEqual(url, "https://new-router.integration.test/api/v1")
+        self.assertEqual(key, "fresh-router-key")
+        return True, "catalog ready", initial_values["live_model_entries"]
+
+      def choose(label, choices, default, **_kwargs):
+        if label == "Connection":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("Marcel Router")
+          )
+        if label == "Which image service should the main agent use by default?":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("FAL.ai")
+          )
+        if label == "Image generation/editing model":
+          return next(
+              index for index, choice in enumerate(choices)
+              if choice.startswith("fal /")
+          )
+        return default
+
+      def checklist(label, _choices, pre_selected):
+        if label == "Choose fallback models (used in this order)":
+          return pre_selected
+        return pre_selected
+
+      def text(label, default="", _password=False):
+        if label == "Marcel Router base URL":
+          return "https://new-router.integration.test/api/v1"
+        if label == "Marcel Routing API key":
+          return "fresh-router-key"
+        if label == "Fallback order by number (Enter keeps this order)":
+          return default
+        return "" if label == "Agent name" else default or ""
+
+      def yes_no(label, _default):
+        if label.startswith("Trust the new Router origin"):
+          return True
+        return False
+
+      with patch.dict(os.environ, {
+          "MARCEL_HOME": str(home),
+          "MARCEL_ROUTER_API_KEY": "",
+          "FAL_KEY": "existing-fal-key",
+      }, clear=False):
+        config_module.save_config(initial)
+        config_module.save_env_value("MARCEL_ROUTER_API_KEY", "old-router-key")
+        existing = config_module.load_config()
+        _, reloaded, events = self._run_setup(
+            home, choose, checklist, text, yes_no, discover=discover,
+            initial_config=existing)
+
+        self.assertNotIn("Marcel Routing account", events)
+        self.assertEqual(
+            reloaded["marcel"]["router"]["base_url"],
+            "https://new-router.integration.test/api/v1",
+        )
+        self.assertEqual(
+            events.count("Fallback order by number (Enter keeps this order)"), 1)
+        self.assertEqual(
+            reloaded["marcel"]["orchestrator"]["model"], "custom/primary")
+        self.assertEqual(
+            reloaded["marcel"]["orchestrator"]["fallback_models"],
+            ["custom/backup-b", "custom/backup-a"],
+        )
+        self.assertEqual(
+            reloaded["marcel"]["routing"]["available_models"],
+            ["custom/primary", "custom/backup-b", "custom/backup-a"],
+        )
+        self.assertEqual(
+            len(reloaded["marcel"]["orchestrator"]["fallback_models"]),
+            len(set(reloaded["marcel"]["orchestrator"]["fallback_models"])),
+        )
+        self.assertEqual(
+            config_module.load_env()["MARCEL_ROUTER_API_KEY"],
+            "fresh-router-key",
+        )
+        self.assertNotIn("old-router-key", (home / ".env").read_text(encoding="utf-8"))
