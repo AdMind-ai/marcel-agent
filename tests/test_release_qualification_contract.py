@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
+import hashlib
+import os
 import subprocess
+import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -26,6 +31,122 @@ def test_rc2_release_defaults_and_vercel_hook_policy_are_explicit():
     assert "release publication will not trigger Vercel" in deploy_workflow
     assert 'https://*) ;;' in deploy_workflow
     assert 'curl -fsS --retry 3 --retry-delay 10 -X POST "$VERCEL_DEPLOY_HOOK"' in deploy_workflow
+
+
+def test_source_archive_is_byte_reproducible_for_the_same_tag(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "test"], check=True
+    )
+    (repo / "file.txt").write_text("stable source\n")
+    subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "initial"],
+        check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-01-02T03:04:05Z",
+            "GIT_COMMITTER_DATE": "2026-01-02T03:04:05Z",
+        },
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "tag", "-a", "v1.2.3", "-m", "release"],
+        check=True,
+        env={
+            **os.environ,
+            "GIT_COMMITTER_DATE": "2026-01-02T03:04:05Z",
+        },
+    )
+
+    script = REPO_ROOT / "scripts/release-checksums.py"
+    archives = [repo / "first.tar.gz", repo / "second.tar.gz"]
+    for archive in archives:
+        subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--version",
+                "1.2.3",
+                "--tag",
+                "v1.2.3",
+                "--build-source-archive",
+                str(archive),
+            ],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    first, second = (archive.read_bytes() for archive in archives)
+    assert first == second
+    assert hashlib.sha256(first).digest() == hashlib.sha256(second).digest()
+    assert first[4:8] == b"\0\0\0\0"
+    manifest = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--version",
+            "1.2.3",
+            "--tag",
+            "v1.2.3",
+            "--build-source-archive",
+            str(repo / "release.tar.gz"),
+            "--output",
+            str(repo / "SHA256SUMS"),
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert manifest.stdout == ""
+    manifest_text = (repo / "SHA256SUMS").read_text()
+    release_bytes = (repo / "release.tar.gz").read_bytes()
+    assert f"{hashlib.sha256(release_bytes).hexdigest()}  release.tar.gz" in manifest_text
+
+    clobber = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--tag",
+            "v1.2.3",
+            "--build-source-archive",
+            str(repo / "collision.tar.gz"),
+            "--output",
+            str(repo / "collision.tar.gz"),
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert clobber.returncode != 0
+    assert "manifest output must not overwrite a release artifact" in clobber.stderr
+    assert not (repo / "collision.tar.gz").exists()
+
+    with tarfile.open(archives[0], "r:gz") as source:
+        assert source.getnames() == [
+            "marcel-agent-1.2.3",
+            "marcel-agent-1.2.3/file.txt",
+        ]
+    assert gzip.decompress(first)
+
+
+def test_approved_review_label_rerun_cannot_fail_silently():
+    workflow = (REPO_ROOT / ".github/workflows/label-rerun.yml").read_text()
+
+    assert "set -euo pipefail" in workflow
+    assert 'gh run rerun "$RUN_ID" --repo "$REPO" --failed || true' not in workflow
+    assert 'gh run rerun "$RUN_ID" --repo "$REPO" --failed' in workflow
+    assert "the approved review gate was not rerun" in workflow
+    assert "for attempt in $(seq 1 12)" in workflow
+    assert 'if [ "$CONCLUSION" = "success" ]' in workflow
 
 
 def test_installers_retain_anonymous_fresh_clone_and_pinned_commit_paths():

@@ -38,30 +38,35 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
-          # Find the latest CI run for this PR's head SHA.
-          RUN_INFO=$(gh run list \
-            --repo "$REPO" \
-            --commit "$HEAD_SHA" \
-            --workflow ci.yaml \
-            --limit 1 \
-            --json databaseId,status \
-            --jq '.[0] | "\(.databaseId) \(.status)"' 2>/dev/null || true)
+          # A label can be added while the pull_request CI run is still being
+          # queued. Wait briefly for the exact head-SHA run to become visible
+          # instead of leaving an approved PR permanently blocked.
+          RUN_INFO=""
+          for attempt in $(seq 1 12); do
+            RUN_INFO=$(gh run list \
+              --repo "$REPO" \
+              --commit "$HEAD_SHA" \
+              --workflow ci.yaml \
+              --limit 1 \
+              --json databaseId,status,conclusion \
+              --jq '.[0] | [.databaseId, .status, (.conclusion // "pending")] | @tsv')
+            if [ -n "$RUN_INFO" ]; then
+              break
+            fi
+            echo "CI run not visible yet (attempt $attempt/12); retrying in 10 seconds..."
+            sleep 10
+          done
 
           if [ -z "$RUN_INFO" ]; then
-            echo "No CI run found for this PR — nothing to rerun."
-            exit 0
+            echo "::error::No CI run found for PR head $HEAD_SHA; the approved review gate was not rerun."
+            exit 1
           fi
 
-          # Split "RUN_ID STATUS" into two vars. Read STATUS from RUN_INFO,
-          # not from the truncated RUN_ID. Both values came from the same
-          # var before, which made STATUS the run id. Thus the wait branch
-          # always ran.
-          RUN_ID="${RUN_INFO%% *}"
-          STATUS="${RUN_INFO##* }"
+          IFS=$'\t' read -r RUN_ID STATUS CONCLUSION <<< "$RUN_INFO"
 
-          echo "Latest CI run: $RUN_ID (status: $STATUS)"
+          echo "Latest CI run: $RUN_ID (status: $STATUS, conclusion: ${CONCLUSION:-pending})"
 
           # If the run is still in progress, wait for it to finish.
           # gh run rerun only works on completed runs — if we try while it's
@@ -75,13 +80,27 @@ jobs:
             timeout 2100 gh run watch "$RUN_ID" --repo "$REPO" --interval 15 || true
 
             # Verify it's actually completed now.
-            STATUS=$(gh run view "$RUN_ID" --repo "$REPO" --json status --jq '.status' 2>/dev/null || echo "unknown")
+            IFS=$'\t' read -r STATUS CONCLUSION < <(
+              gh run view "$RUN_ID" --repo "$REPO" \
+                --json status,conclusion \
+                --jq '[.status, (.conclusion // "pending")] | @tsv'
+            )
             if [ "$STATUS" != "completed" ]; then
-              echo "Run is still $STATUS after wait — giving up."
-              exit 0
+              echo "::error::CI run $RUN_ID is still $STATUS after the wait; the approved review gate was not rerun."
+              exit 1
             fi
           fi
 
-          echo "Run completed. Rerunning all failed jobs..."
-          gh run rerun "$RUN_ID" --repo "$REPO" --failed || true
+          if [ "$CONCLUSION" = "success" ]; then
+            echo "CI run is already successful; no rerun is needed."
+            exit 0
+          fi
+
+          if [ "$CONCLUSION" = "failure" ]; then
+            echo "Run completed with failures. Rerunning failed jobs..."
+            gh run rerun "$RUN_ID" --repo "$REPO" --failed
+          else
+            echo "Run completed with conclusion ${CONCLUSION:-unknown}. Rerunning the full workflow..."
+            gh run rerun "$RUN_ID" --repo "$REPO"
+          fi
           echo "Done. GitHub will rerun review-labels and all dependent jobs."
