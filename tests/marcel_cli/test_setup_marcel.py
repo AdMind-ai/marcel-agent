@@ -24,6 +24,8 @@ from marcel_cli.setup_marcel import (
     _fallback_catalog,
     _generation_catalog,
     _vision_catalog,
+    _direct_vision_catalog,
+    _direct_model_capabilities,
     _worker_llm_catalog,
     _normalize_router_models,
     _catalog_for_activity,
@@ -590,6 +592,20 @@ class MarcelSetupTests(unittest.TestCase):
     self.assertIn("legacy/custom-model", selected)
     self.assertTrue(any("Existing/custom" in choice for choice in setup.seen_checklist))
 
+  def test_available_models_deduplicates_overlapping_current_primary_and_fallback(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [MODEL_CHOICES[0][1], "legacy/custom-model"],
+      current=[MODEL_CHOICES[0][1], "legacy/custom-model"],
+    )
+    self.assertEqual(
+      selected,
+      [MODEL_CHOICES[0][1], "legacy/custom-model"],
+    )
+    self.assertEqual(len(selected), len(set(selected)))
+
   def test_router_origin_normalization_is_stable(self):
     self.assertEqual(
       _normalized_router_origin("https://Router.Example.test:443/v1/"),
@@ -640,7 +656,7 @@ class MarcelSetupTests(unittest.TestCase):
 
   def test_generation_catalog_excludes_router_vision_and_unknown_entries(self):
     live = [
-      {"id": "vision", "metadata": {"capabilities": ["vision"]}},
+      {"id": "vision", "metadata": {"capabilities": ["vision", "chat"]}},
       {"id": "unknown", "metadata": {"capabilities": ["chat"]}},
       {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
     ]
@@ -652,7 +668,7 @@ class MarcelSetupTests(unittest.TestCase):
   def test_vision_catalog_requires_explicit_capability_and_stays_separate(self):
     live = [
       {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
-      {"id": "vision", "metadata": {"capabilities": ["vision"]}},
+      {"id": "vision", "metadata": {"capabilities": ["vision", "chat"]}},
     ]
     self.assertEqual([item[1] for item in _vision_catalog(live)], ["vision"])
     self.assertEqual([item[1] for item in _generation_catalog(live)], ["generator"])
@@ -666,6 +682,44 @@ class MarcelSetupTests(unittest.TestCase):
       [model_id for _, model_id in _fallback_catalog("vision", live)],
       ["vision"],
     )
+
+  def test_direct_vision_catalog_uses_authoritative_mockable_capabilities(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = True
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      catalog = _direct_vision_catalog("openai-api")
+    self.assertTrue(catalog)
+    self.assertTrue(all(model_id.startswith("openai/") for _, model_id in catalog))
+
+  def test_direct_vision_catalog_fails_closed_for_pure_vision_metadata(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = False
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      self.assertEqual(_direct_vision_catalog("openai-api"), [])
+
+  def test_direct_vision_worker_picker_uses_direct_chat_catalog(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = True
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      selected = _choose_model(
+        _SetupStub(0),
+        "Vision worker model",
+        activity="vision",
+        provider="openai-api",
+      )
+    self.assertTrue(selected.startswith("openai/"))
 
   def test_registered_image_model_keeps_its_provider(self):
     self.assertEqual(
@@ -688,6 +742,27 @@ class MarcelSetupTests(unittest.TestCase):
       }],
     })
     self.assertEqual(config["delegation"]["workers"]["artist"]["provider"], "openai-api")
+
+  def test_legacy_media_worker_migrates_to_llm_and_global_image_service(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": ["openai/gpt-5.6-luna"],
+      "workers": [{
+        "id": "artist", "activity": "image",
+        "model": "fal-ai/flux-2/klein/9b",
+        "fallbacks": ["fal-ai/gpt-image-2"],
+      }],
+    })
+    worker = config["delegation"]["workers"]["artist"]
+    llm_ids = {model_id for _, model_id in MODEL_CHOICES}
+    self.assertIn(worker["model"], llm_ids)
+    self.assertEqual(worker["fallback_models"], ["openai/gpt-5.6-luna"])
+    self.assertEqual(config["image_gen"]["provider"], "fal")
+    self.assertNotIn("fal-ai/flux-2/klein/9b", str(worker))
+    self.assertNotIn("fal-ai/gpt-image-2", str(worker))
 
   def test_router_worker_transport_stays_marcel_despite_owned_by_metadata(self):
     config = apply_marcel_config({}, {

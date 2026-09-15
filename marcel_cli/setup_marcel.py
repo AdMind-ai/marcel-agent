@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from urllib.parse import urlsplit
 from typing import Any
 
@@ -502,6 +503,8 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
     for key in ("provider", "model", "role"):
         value = worker.get(key)
         if value not in (None, ""):
+            if key == "model" and _registered_image_provider_for_model(str(value).strip()):
+                continue
             result[key] = str(value).strip()
     if _is_image_generation_activity(activity):
         result["image_service"] = "global"
@@ -511,7 +514,10 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str):
             value = value.split(",")
         if isinstance(value, (list, tuple)):
-            cleaned = [str(item).strip() for item in value if str(item).strip()]
+            cleaned = [
+                str(item).strip() for item in value if str(item).strip()
+                and not _registered_image_provider_for_model(str(item).strip())
+            ]
             if cleaned:
                 result[target_key] = cleaned
     for source_key, target_key in (("concurrency", "max_concurrency"),
@@ -789,9 +795,12 @@ def apply_marcel_config(config: dict[str, Any], values: dict[str, Any]) -> dict[
 
     delegation = config.setdefault("delegation", {})
     workers: dict[str, Any] = {}
+    main_fallbacks = list(marcel["orchestrator"].get("fallback_models", []))
     for raw_worker in values.get("workers", []):
         if not isinstance(raw_worker, dict):
             continue
+        raw_worker = _migrate_image_worker(
+            raw_worker, config, values, model_id, main_fallbacks)
         worker = normalize_worker(raw_worker)
         worker_id = worker.pop("id")
         worker["provider"] = _runtime_llm_provider(worker.get("model", ""), values, provider_id)
@@ -897,6 +906,7 @@ def _model_capabilities(entry: dict[str, Any]) -> set[str]:
 
 def _catalog_for_activity(
     activity: str = "", live_models: list[dict[str, Any]] | None = None,
+    provider: str = "",
 ) -> list[tuple[str, str]]:
     """Build one canonical picker source for primary, available, and fallback choices."""
     if _is_image_generation_activity(activity):
@@ -904,7 +914,7 @@ def _catalog_for_activity(
         # chat/tool model; image_gen is supplied by the global image service.
         return _worker_llm_catalog(live_models)
     if activity == "vision":
-        return _vision_catalog(live_models)
+        return _vision_catalog(live_models, provider=provider)
     if live_models:
         entries: list[tuple[str, str]] = []
         for entry in live_models:
@@ -982,14 +992,16 @@ def _generation_catalog(
 
 
 def _vision_catalog(
-    live_models: list[dict[str, Any]] | None = None,
+    live_models: list[dict[str, Any]] | None = None, *, provider: str = "",
 ) -> list[tuple[str, str]]:
     """Return only live models with explicit vision/image-analysis capability."""
     if not live_models:
-        return []
+        return _direct_vision_catalog(provider)
     result: list[tuple[str, str]] = []
     for entry in live_models:
         if not isinstance(entry, dict) or "vision" not in _model_capabilities(entry):
+            continue
+        if not _has_chat_semantics(_model_capabilities(entry)):
             continue
         model_id = str(entry.get("id") or "").strip()
         if not model_id:
@@ -997,6 +1009,49 @@ def _vision_catalog(
         provider = str(entry.get("provider") or entry.get("owned_by") or "").strip()
         identity = f"{provider} / {model_id}" if provider else model_id
         result.append((f"Router — image analysis (vision) — {identity}", model_id))
+    return result
+
+
+def _has_chat_semantics(capabilities: set[str]) -> bool:
+    """Fail closed unless metadata explicitly identifies a chat/tool/text LLM."""
+    return bool(capabilities & {
+        "chat", "chat_completions", "text", "tool_use", "tools", "supports_tools",
+    })
+
+
+@lru_cache(maxsize=128)
+def _direct_model_capabilities(provider: str, model: str) -> frozenset[str]:
+    """Read authoritative direct-provider capability metadata, safely cacheable and mockable."""
+    try:
+        from agent.models_dev import get_model_capabilities
+        metadata = get_model_capabilities(provider=provider, model=model)
+    except Exception:
+        return frozenset()
+    if metadata is None:
+        return frozenset()
+    if isinstance(metadata, dict):
+        return frozenset(str(key).lower() for key, value in metadata.items() if value is True)
+    return frozenset(
+        name for name in (
+            "vision", "supports_vision", "chat", "supports_chat", "chat_completions",
+            "supports_chat_completions", "text", "supports_text", "tools", "supports_tools",
+            "tool_use",
+        ) if getattr(metadata, name, False) is True
+    )
+
+
+def _direct_vision_catalog(provider: str) -> list[tuple[str, str]]:
+    """Build vision choices from executable direct chat models, never Router data."""
+    if not provider:
+        return []
+    result: list[tuple[str, str]] = []
+    for label, model_id in MODEL_CHOICES:
+        if _direct_provider_for_model(model_id) != provider:
+            continue
+        capabilities = _direct_model_capabilities(provider, model_id)
+        if not ({"vision", "supports_vision"} & capabilities) or not _has_chat_semantics(capabilities):
+            continue
+        result.append((f"{label} [vision/chat]", model_id))
     return result
 
 
@@ -1011,7 +1066,7 @@ def _choose_model(
     provider: str = "",
 ) -> str:
     """Show a compact provider-grouped catalog while retaining a custom-ID escape hatch."""
-    catalog = _catalog_for_activity(activity, live_models)
+    catalog = _catalog_for_activity(activity, live_models, provider=provider)
     if not catalog:
         setup.print_error(
             "No compatible model with the required image/vision capability is available."
@@ -1096,6 +1151,52 @@ def _runtime_llm_provider(model_id: str, values: dict[str, Any], default: str) -
     return _direct_provider_for_model(model_id) or default
 
 
+def _migrate_image_worker(
+    raw_worker: dict[str, Any],
+    config: dict[str, Any],
+    values: dict[str, Any],
+    main_model: str,
+    main_fallbacks: list[str],
+) -> dict[str, Any]:
+    """Migrate legacy media-model workers onto an LLM plus the global image service."""
+    activity = str(raw_worker.get("activity") or "").strip().lower()
+    if not _is_image_generation_activity(activity):
+        return raw_worker
+    candidates = [raw_worker.get("model")]
+    raw_fallbacks = raw_worker.get("fallbacks") or raw_worker.get("fallback_models") or []
+    if isinstance(raw_fallbacks, str):
+        raw_fallbacks = [raw_fallbacks]
+    candidates.extend(raw_fallbacks if isinstance(raw_fallbacks, (list, tuple)) else [])
+    media_models = [
+        str(model).strip() for model in candidates
+        if str(model or "").strip() and _registered_image_provider_for_model(str(model).strip())
+    ]
+    image_config = config.get("image_gen") if isinstance(config.get("image_gen"), dict) else {}
+    if media_models and (
+        not image_config or image_config.get("provider") in {"", "marcel"}
+    ):
+        provider = _registered_image_provider_for_model(media_models[0])
+        config["image_gen"] = {"provider": provider, "model": media_models[0]}
+    migrated = dict(raw_worker)
+    if _registered_image_provider_for_model(str(migrated.get("model") or "").strip()):
+        migrated["model"] = main_model or next(
+            (model_id for _, model_id in _worker_llm_catalog(values.get("live_model_entries"))), ""
+        )
+    valid_fallbacks = []
+    for fallback in raw_fallbacks if isinstance(raw_fallbacks, (list, tuple)) else []:
+        fallback = str(fallback).strip()
+        if fallback and not _registered_image_provider_for_model(fallback):
+            valid_fallbacks.append(fallback)
+    if media_models:
+        valid_fallbacks.extend(main_fallbacks)
+    seen: set[str] = set()
+    migrated["fallbacks"] = [
+        fallback for fallback in valid_fallbacks
+        if fallback != migrated.get("model") and not (fallback in seen or seen.add(fallback))
+    ]
+    return migrated
+
+
 def _choose_direct_provider(setup: Any, current: str = "") -> tuple[str, str, str, str, str]:
     """Explicitly choose a known direct provider before its model picker.
 
@@ -1145,10 +1246,12 @@ def _choose_available_models(
     current_models.update([primary, *fallbacks])
     catalog_by_id = {model_id: (label, model_id) for label, model_id in catalog}
     ordered_catalog: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
     for model_id in [*(current or ()), primary, *fallbacks]:
         model_id = str(model_id).strip()
-        if not model_id:
+        if not model_id or model_id in seen_ids:
             continue
+        seen_ids.add(model_id)
         ordered_catalog.append(
             catalog_by_id.pop(model_id, (f"Existing/custom — {model_id}", model_id))
         )
@@ -1430,9 +1533,10 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
 
 def _fallback_catalog(
     activity: str, live_models: list[dict[str, Any]] | None = None,
+    *, provider: str = "",
 ) -> list[tuple[str, str]]:
     """Return capability-relevant fallbacks, with broad text choices and no duplicates."""
-    activity_catalog = _catalog_for_activity(activity, live_models)
+    activity_catalog = _catalog_for_activity(activity, live_models, provider=provider)
     source = activity_catalog if _is_image_generation_activity(activity) or activity in {"video", "vision"} else (
         *activity_catalog, *_catalog_for_activity("", live_models))
     result: list[tuple[str, str]] = []
@@ -1477,8 +1581,9 @@ def _choose_fallback_models(
     setup: Any, activity: str, primary: str,
     *, live_models: list[dict[str, Any]] | None = None,
     current: list[str] | None = None,
+    provider: str = "",
 ) -> list[str]:
-    catalog = _fallback_catalog(activity, live_models)
+    catalog = _fallback_catalog(activity, live_models, provider=provider)
     options = [(label, model_id) for label, model_id in catalog if model_id != primary]
     selected = setup.prompt_checklist(
         "Choose fallback models (used in this order)",
@@ -1879,7 +1984,8 @@ def setup_marcel(config: dict) -> None:
     )
     orchestrator_fallbacks = _choose_fallback_models(
         setup, "general", orchestrator_model, live_models=live_models,
-        current=current_orchestrator_fallbacks)
+        current=current_orchestrator_fallbacks,
+        provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "")
     values["orchestrator_model"] = orchestrator_model
     values["orchestrator_fallback_models"] = orchestrator_fallbacks
     values["available_models"] = _choose_available_models(
@@ -2062,7 +2168,8 @@ def setup_marcel(config: dict) -> None:
                         "No Brave Search API key was provided; Marcel will use automatic web search.")
             values["search_provider_configured"] = True
         fallback_models = _choose_fallback_models(
-            setup, activity, sub_agent_model, live_models=live_models)
+            setup, activity, sub_agent_model, live_models=live_models,
+            provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "")
         worker = {
             "name": name,
             "activity": activity,
