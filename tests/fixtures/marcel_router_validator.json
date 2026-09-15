@@ -2,7 +2,7 @@
   "responses": [
     {
       "method": "GET",
-      "path": "/health",
+      "path": "/healthz",
       "status": 200,
       "body": {"status": "ok", "version": "1.0.0"}
     },
@@ -17,15 +17,16 @@
           "object": "model",
           "created": 1,
           "owned_by": "demo",
-          "marcel": {
-            "provider": "demo",
-            "modalities": ["text"],
-            "capabilities": {
-              "chat": true,
-              "streaming": true,
-              "tools": true,
-              "json_schema": true
-            }
+          "metadata": {
+            "capabilities": ["chat", "streaming", "tools", "json_schema"],
+            "recommended_for": ["compatibility tests"],
+            "cost_tier": "test",
+            "speed_tier": "test",
+            "quality_tier": "test",
+            "context_window": 4096,
+            "supports_streaming": true,
+            "supports_tool_calls": true,
+            "supports_json_schema": true
           }
         }]
       }
