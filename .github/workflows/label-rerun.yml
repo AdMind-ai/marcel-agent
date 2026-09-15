@@ -4,6 +4,10 @@ name: Label rerun
 # the latest CI run. This re-evaluates ``review-labels`` (which now sees the
 # label) and GitHub reruns the dependent ``all-checks-pass`` gate.
 #
+# ``synchronize`` and ``closed`` events intentionally create no job work.
+# They enter this same per-PR concurrency group only to cancel a stale label
+# run that is still waiting for its old CI head.
+#
 # ``gh run rerun`` only works on a completed run. Thus this waits when the
 # run is still in progress. The wait is now short. The two slowest jobs are
 # the 40-minute comment poller and the 45-minute image build. Each one moved
@@ -15,7 +19,7 @@ name: Label rerun
 
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize, closed]
 
 permissions:
   actions: write
@@ -28,7 +32,11 @@ concurrency:
 jobs:
   rerun-review-labels:
     name: Rerun review-labels job
-    if: github.event.label.name == 'ci-reviewed'
+    # Only the label action does rerun work. Synchronize/closed runs are
+    # intentionally skipped after concurrency has cancelled stale waiters.
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ci-reviewed'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

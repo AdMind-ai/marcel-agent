@@ -73,10 +73,24 @@ def test_dependabot_groups_routine_action_updates_without_disabling_security():
 
 def test_label_rerun_aborts_stale_heads_before_and_after_waiting():
     workflow = _yaml(".github/workflows/label-rerun.yml")
+    trigger = workflow["on"]["pull_request"]
+    concurrency = workflow["concurrency"]
+    job = workflow["jobs"]["rerun-review-labels"]
     step = workflow["jobs"]["rerun-review-labels"]["steps"][0]
     env = step["env"]
     script = step["run"]
 
+    assert trigger["types"] == ["labeled", "synchronize", "closed"]
+    assert concurrency["group"] == "label-rerun-${{ github.event.pull_request.number }}"
+    assert concurrency["cancel-in-progress"] == "true"
+    assert "github.event.action == 'labeled'" in job["if"]
+    assert "github.event.label.name == 'ci-reviewed'" in job["if"]
+    assert "synchronize" in (ROOT / ".github/workflows/label-rerun.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "closed" in (ROOT / ".github/workflows/label-rerun.yml").read_text(
+        encoding="utf-8"
+    )
     assert env["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
     assert env["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
     assert 'gh api "repos/$REPO/pulls/$PR_NUMBER" --jq \'.head.sha\'' in script
