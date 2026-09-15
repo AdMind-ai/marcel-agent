@@ -69,3 +69,25 @@ def test_dependabot_groups_routine_action_updates_without_disabling_security():
     assert group["update-types"] == ["minor", "patch"]
     assert "Security updates still open individually and bypass grouping." in text
     assert "ignore:" not in text
+
+
+def test_label_rerun_aborts_stale_heads_before_and_after_waiting():
+    workflow = _yaml(".github/workflows/label-rerun.yml")
+    step = workflow["jobs"]["rerun-review-labels"]["steps"][0]
+    env = step["env"]
+    script = step["run"]
+
+    assert env["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert env["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert 'gh api "repos/$REPO/pulls/$PR_NUMBER" --jq \'.head.sha\'' in script
+    assert 'if [ "$CURRENT_HEAD_SHA" != "$HEAD_SHA" ]' in script
+    assert "exit 0" in script
+
+    # One check protects run selection; the second is after completion
+    # waiting and immediately precedes either possible rerun command.
+    assert script.count("check_current_head") == 3  # definition plus two calls
+    after_wait = script.index("check_current_head", script.index("gh run view"))
+    first_rerun = script.index('gh run rerun "$RUN_ID"')
+    assert after_wait < first_rerun
+    assert 'gh run rerun "$RUN_ID" --repo "$REPO" --failed' in script
+    assert 'gh run rerun "$RUN_ID" --repo "$REPO"' in script
