@@ -67,6 +67,12 @@ _MODEL_PROVIDER_ALIASES = {
     "gemini": "gemini",
     "xai": "xai",
 }
+_MODELS_DEV_PROVIDER_ALIASES = {
+    "anthropic": "anthropic",
+    "openai-api": "openai",
+    "gemini": "google",
+    "xai": "xai",
+}
 _MAX_AGENT_NAME_LENGTH = 128
 
 
@@ -1024,7 +1030,12 @@ def _direct_model_capabilities(provider: str, model: str) -> frozenset[str]:
     """Read authoritative direct-provider capability metadata, safely cacheable and mockable."""
     try:
         from agent.models_dev import get_model_capabilities
-        metadata = get_model_capabilities(provider=provider, model=model)
+        models_dev_provider = _MODELS_DEV_PROVIDER_ALIASES.get(provider, provider)
+        bare_model = str(model or "").strip()
+        prefix, separator, remainder = bare_model.partition("/")
+        if separator and _direct_provider_for_model(bare_model) == provider:
+            bare_model = remainder
+        metadata = get_model_capabilities(provider=models_dev_provider, model=bare_model)
     except Exception:
         return frozenset()
     if metadata is None:
@@ -1162,6 +1173,23 @@ def _migrate_image_worker(
     activity = str(raw_worker.get("activity") or "").strip().lower()
     if not _is_image_generation_activity(activity):
         return raw_worker
+    live_generation_ids = {
+        str(entry.get("id") or "").strip()
+        for entry in values.get("live_model_entries", [])
+        if isinstance(entry, dict)
+        and str(entry.get("id") or "").strip()
+        and {"image_generation", "image_editing"} & _model_capabilities(entry)
+    }
+
+    def is_media_model(model: Any) -> bool:
+        model_id = str(model or "").strip()
+        return bool(
+            model_id and (
+                _registered_image_provider_for_model(model_id)
+                or model_id in live_generation_ids
+            )
+        )
+
     candidates = [raw_worker.get("model")]
     raw_fallbacks = raw_worker.get("fallbacks") or raw_worker.get("fallback_models") or []
     if isinstance(raw_fallbacks, str):
@@ -1169,23 +1197,26 @@ def _migrate_image_worker(
     candidates.extend(raw_fallbacks if isinstance(raw_fallbacks, (list, tuple)) else [])
     media_models = [
         str(model).strip() for model in candidates
-        if str(model or "").strip() and _registered_image_provider_for_model(str(model).strip())
+        if is_media_model(model)
+    ]
+    registered_media_models = [
+        model for model in media_models if _registered_image_provider_for_model(model)
     ]
     image_config = config.get("image_gen") if isinstance(config.get("image_gen"), dict) else {}
-    if media_models and (
+    if registered_media_models and (
         not image_config or image_config.get("provider") in {"", "marcel"}
     ):
-        provider = _registered_image_provider_for_model(media_models[0])
-        config["image_gen"] = {"provider": provider, "model": media_models[0]}
+        provider = _registered_image_provider_for_model(registered_media_models[0])
+        config["image_gen"] = {"provider": provider, "model": registered_media_models[0]}
     migrated = dict(raw_worker)
-    if _registered_image_provider_for_model(str(migrated.get("model") or "").strip()):
+    if is_media_model(migrated.get("model")):
         migrated["model"] = main_model or next(
             (model_id for _, model_id in _worker_llm_catalog(values.get("live_model_entries"))), ""
         )
     valid_fallbacks = []
     for fallback in raw_fallbacks if isinstance(raw_fallbacks, (list, tuple)) else []:
         fallback = str(fallback).strip()
-        if fallback and not _registered_image_provider_for_model(fallback):
+        if fallback and not is_media_model(fallback):
             valid_fallbacks.append(fallback)
     if media_models:
         valid_fallbacks.extend(main_fallbacks)
@@ -2127,6 +2158,7 @@ def setup_marcel(config: dict) -> None:
             allow_automatic=True,
             activity=activity,
             live_models=live_models,
+            provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "",
         )
         if not sub_agent_model:
             setup.print_error(
