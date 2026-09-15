@@ -63,9 +63,11 @@ provenance and its MIT notices are documented in [UPSTREAM.md](UPSTREAM.md) and
 
 ## Current foundation
 
-- OpenAI-compatible Marcel Router for chat, model discovery, image generation,
-  realtime voice, asynchronous video, embeddings, moderation, reranking,
-  translation, document translation, and search/data tools.
+- OpenAI-compatible Marcel Router contract and offline validator covering chat,
+  model discovery, image generation, realtime voice, asynchronous video,
+  embeddings, moderation, reranking, translation, document translation, and
+  search/data tools. This source tree does not establish availability of a
+  hosted router.
 - Configurable orchestrator plus an unbounded registry of named workers.
 - Worker-specific provider, model, tools/toolsets, concurrency, iteration, timeout, fallback, and
   budget metadata.
@@ -84,10 +86,10 @@ The router contract is documented in:
 - [docs/marcel-router.md](docs/marcel-router.md)
 - [docs/marcel-router-openapi.yaml](docs/marcel-router-openapi.yaml)
 
-Router endpoints:
+Documented router endpoints (deployment availability must be verified):
 
 ```text
-Base URL                       https://marcel-agent.com/api
+Base URL                       <deployment>/api
 GET    /v1/models              Model catalog
 POST   /v1/chat/completions    Chat completions and streaming
 POST   /v1/images/generations  Text-to-image generation
@@ -180,16 +182,21 @@ uv run marcel-router-validate \
   --fixture tests/fixtures/marcel_router_validator.json
 ```
 
-When a real router is available:
+When a real router is available, live validation can be run:
 
 ```bash
 export MARCEL_ROUTER_API_KEY="..."
-uv run marcel-router-validate --base-url https://marcel-agent.com/api/v1
+export MARCEL_ROUTER_BASE_URL="https://<deployment>/api/v1"
+uv run marcel-router-validate --base-url "$MARCEL_ROUTER_BASE_URL"
 ```
 
-For CI or machine-readable diagnostics, add `--json`. The validator checks health, catalog metadata,
-normal chat, SSE streaming, tool calls, structured JSON, authentication errors, and invalid-model
-errors. The API key is read from the environment and is never written to a fixture or report.
+For CI or machine-readable diagnostics, add `--json`. Offline fixture status is
+covered by the test suite; live endpoint validation has not been run from this
+source tree. The validator checks health, catalog metadata, normal chat, SSE
+streaming, tool calls, structured JSON, authentication errors, invalid-model
+errors, and advertised extended capabilities. Realtime WebSocket event exchange
+requires a live endpoint and is reported as a live-only validation gap. The API
+key is read from the environment and is never written to a fixture or report.
 
 Deterministic routing fixtures are available in `tests/fixtures/marcel_routing_config.json` and
 `tests/fixtures/marcel_router_catalog.json`.

@@ -20,7 +20,12 @@ concurrency:
 jobs:
   publish:
     name: Publish inline E2E evidence
-    if: github.event.workflow_run.event == 'pull_request'
+    # A cancelled CI run cannot produce a trustworthy evidence artifact.
+    # Keep this at job level so cancellation is filtered before checkout,
+    # extension installation, or any artifact/API work.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: gh-image

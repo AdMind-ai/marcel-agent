@@ -4,6 +4,10 @@ name: Label rerun
 # the latest CI run. This re-evaluates ``review-labels`` (which now sees the
 # label) and GitHub reruns the dependent ``all-checks-pass`` gate.
 #
+# ``synchronize`` and ``closed`` events intentionally create no job work.
+# They enter this same per-PR concurrency group only to cancel a stale label
+# run that is still waiting for its old CI head.
+#
 # ``gh run rerun`` only works on a completed run. Thus this waits when the
 # run is still in progress. The wait is now short. The two slowest jobs are
 # the 40-minute comment poller and the 45-minute image build. Each one moved
@@ -15,7 +19,7 @@ name: Label rerun
 
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize, closed]
 
 permissions:
   actions: write
@@ -28,7 +32,11 @@ concurrency:
 jobs:
   rerun-review-labels:
     name: Rerun review-labels job
-    if: github.event.label.name == 'ci-reviewed'
+    # Only the label action does rerun work. Synchronize/closed runs are
+    # intentionally skipped after concurrency has cancelled stale waiters.
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ci-reviewed'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -36,9 +44,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # Keep the PR number in the environment rather than interpolating
+          # event data into shell source. It is the authoritative PR to
+          # query after an update-branch race.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+
+          check_current_head() {
+            CURRENT_HEAD_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+            if [ "$CURRENT_HEAD_SHA" != "$HEAD_SHA" ]; then
+              echo "PR #$PR_NUMBER advanced from $HEAD_SHA to $CURRENT_HEAD_SHA; skipping stale CI rerun."
+              exit 0
+            fi
+          }
 
           # A label can be added while the pull_request CI run is still being
           # queued. Wait briefly for the exact head-SHA run to become visible
@@ -63,6 +83,10 @@ jobs:
             echo "::error::No CI run found for PR head $HEAD_SHA; the approved review gate was not rerun."
             exit 1
           fi
+
+          # The label event can be delivered after update-branch has already
+          # moved the PR. Do not even wait on, or rerun, the stale run.
+          check_current_head
 
           IFS=$'\t' read -r RUN_ID STATUS CONCLUSION <<< "$RUN_INFO"
 
@@ -95,6 +119,10 @@ jobs:
             echo "CI run is already successful; no rerun is needed."
             exit 0
           fi
+
+          # Re-read immediately before rerun as well. The PR can advance
+          # while the old CI run is completing; this closes that TOCTOU race.
+          check_current_head
 
           if [ "$CONCLUSION" = "failure" ]; then
             echo "Run completed with failures. Rerunning failed jobs..."
