@@ -19,6 +19,7 @@ values are stored in the repository.
 | `installer-tests.yml` | Installer behavior tests | None | Release/manual gate |
 | `install-e2e.yml` | Install/update end-to-end coverage | None | Release/manual gate |
 | `install-e2e-run.yml` | Reusable install/update E2E implementation | None | Supporting |
+| `stable-readiness.yml` | Secret-free immutable-candidate archive, checksum, clean-import, update, and rollback qualification | None | Release/manual gate |
 | `windows-venv-e2e.yml` | Windows virtual-environment E2E | None | Release/manual gate |
 | `e2e-desktop.yml` | Desktop end-to-end tests | None | Recommended |
 | `nix.yml` | Nix flake checks | None | Recommended |
@@ -53,6 +54,10 @@ artifacts are part of the release. Keep publish jobs protected by their
 existing environment and repository conditions; do not make credentials a
 pull-request requirement.
 
-This is an inventory, not a workflow policy change. Workflows remain
-unchanged, and GitHub-provided `GITHUB_TOKEN` is listed only where referenced
-explicitly.
+`stable-readiness.yml` is an evidence-only manual gate. It accepts an existing
+immutable candidate tag or full commit SHA, performs no tag creation or
+publishing, and does not replace the credentialed Docker/site gates.
+
+This is an inventory, not a workflow policy change. The stable-readiness lane
+is manual and read-only; GitHub-provided `GITHUB_TOKEN` is listed only where
+referenced explicitly.

@@ -34,6 +34,15 @@ Invoke-WebRequest `
 For a versioned installer and checksummed source archive, use the
 [GitHub Releases](https://github.com/AdMind-ai/marcel-agent/releases) page.
 
+## Release readiness
+
+Marcel is currently a public prerelease; stable support has not been
+announced. See the [support matrix](docs/support-matrix.md) for the tested
+platform target and its qualification boundaries. Existing users should use
+the [update and rollback guide](docs/update-rollback.md). The secret-free
+[stable-readiness workflow](.github/workflows/stable-readiness.yml) qualifies
+an existing immutable candidate without publishing it.
+
 ## Why Marcel exists
 
 Marcel builds on its documented upstream foundation while adding a

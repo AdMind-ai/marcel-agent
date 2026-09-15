@@ -1,0 +1,265 @@
+name: Stable readiness (no credentials)
+
+# This workflow qualifies an existing candidate. It never creates a tag,
+# publishes a release, or calls a provider. The retained run artifacts are
+# qualification evidence, not release packages.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate-ref:
+        description: 'Existing immutable vX.Y.Z[-prerelease] tag or full commit SHA'
+        required: true
+        type: string
+      candidate-version:
+        description: 'Project version in the candidate (for example 0.21.0)'
+        required: true
+        type: string
+      historical-ref:
+        description: 'Previously released SemVer tag used for update/rollback evidence'
+        required: true
+        default: v0.21.0-rc.1
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-readiness-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: Resolve immutable qualification refs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted resolver
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate and resolve refs once
+        id: resolve
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate-ref }}
+          CANDIDATE_VERSION: ${{ inputs.candidate-version }}
+          HISTORICAL_REF: ${{ inputs.historical-ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          identifier = r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+          semver = re.compile(
+              r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+              rf"(?:-{identifier}(?:\.{identifier})*)?"
+              r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          )
+
+          def output(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+                  stream.write(f"{name}={value}\n")
+
+          def resolve(ref, label):
+              if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+                  sha = subprocess.check_output(
+                      ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+                      text=True,
+                  ).strip()
+                  return sha, label
+              if not ref.startswith("v") or not semver.fullmatch(ref[1:]):
+                  raise SystemExit(
+                      f"{label} must be a v-prefixed strict SemVer tag or full commit SHA"
+                  )
+              # argv form of: git show-ref --verify --quiet refs/tags/<tag>
+              subprocess.run(
+                  ["git", "show-ref", "--verify", "--quiet", f"refs/tags/{ref}"],
+                  check=True,
+              )
+              sha = subprocess.check_output(
+                  ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+                  text=True,
+              ).strip()
+              return sha, ref
+
+          candidate_ref = os.environ["CANDIDATE_REF"]
+          candidate_version = os.environ["CANDIDATE_VERSION"]
+          historical_ref = os.environ["HISTORICAL_REF"]
+          if not semver.fullmatch(candidate_version):
+              raise SystemExit("candidate-version must be strict SemVer 2.0.0")
+          candidate_sha, candidate_label = resolve(candidate_ref, "candidate-ref")
+          historical_sha, _ = resolve(historical_ref, "historical-ref")
+          output("candidate-sha", candidate_sha)
+          output(
+              "candidate-label",
+              candidate_label if candidate_ref.startswith("v") else f"v{candidate_version}",
+          )
+          output("historical-sha", historical_sha)
+          print(f"candidate {candidate_ref} -> {candidate_sha}")
+          print(f"historical {historical_ref} -> {historical_sha}")
+          PY
+    outputs:
+      candidate-sha: ${{ steps.resolve.outputs.candidate-sha }}
+      candidate-label: ${{ steps.resolve.outputs.candidate-label }}
+      historical-sha: ${{ steps.resolve.outputs.historical-sha }}
+
+  trusted-evidence:
+    name: Produce trusted archive evidence
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # This job only runs trusted workflow code. Candidate source is read as a
+      # Git object by the trusted checksum script; no candidate setup/build code
+      # is executed here.
+      - name: Checkout trusted evidence producer
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and verify deterministic archive
+        env:
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate-sha }}
+          CANDIDATE_LABEL: ${{ needs.resolve.outputs.candidate-label }}
+          CANDIDATE_VERSION: ${{ inputs.candidate-version }}
+          EVIDENCE_ROOT: ${{ runner.temp }}/stable-readiness
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          python3 scripts/release-checksums.py \
+            --version "$CANDIDATE_VERSION" --tag "$CANDIDATE_LABEL" \
+            --source-ref "$CANDIDATE_SHA" \
+            --build-source-archive "$EVIDENCE_ROOT/marcel-source.tar.gz" \
+            --output "$EVIDENCE_ROOT/SHA256SUMS"
+          python3 scripts/release-checksums.py \
+            --version "$CANDIDATE_VERSION" --tag "$CANDIDATE_LABEL" \
+            --source-ref "$CANDIDATE_SHA" \
+            --build-source-archive "$EVIDENCE_ROOT/marcel-source-again.tar.gz" \
+            --output "$EVIDENCE_ROOT/SHA256SUMS-again"
+          cmp "$EVIDENCE_ROOT/marcel-source.tar.gz" \
+            "$EVIDENCE_ROOT/marcel-source-again.tar.gz"
+          (cd "$EVIDENCE_ROOT" && sha256sum --check SHA256SUMS)
+
+      # This upload happens before any job executes candidate code. Artifact
+      # names are unique, so the original bytes cannot be overwritten in-place.
+      - name: Upload immutable source evidence before smoke
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stable-readiness-source-${{ needs.resolve.outputs.candidate-sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/stable-readiness/marcel-source.tar.gz
+            ${{ runner.temp }}/stable-readiness/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Clean archive install and CLI smoke
+    needs: [resolve, trusted-evidence]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download original trusted source evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: stable-readiness-source-${{ needs.resolve.outputs.candidate-sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/stable-readiness/input
+
+      - name: Verify and copy source evidence into disposable smoke area
+        env:
+          INPUT_ROOT: ${{ runner.temp }}/stable-readiness/input
+          SMOKE_ROOT: ${{ runner.temp }}/stable-readiness/smoke
+        run: |
+          set -euo pipefail
+          (cd "$INPUT_ROOT" && sha256sum --check SHA256SUMS)
+          mkdir -p "$SMOKE_ROOT/source"
+          cp "$INPUT_ROOT/marcel-source.tar.gz" "$SMOKE_ROOT/marcel-source.tar.gz"
+          tar -xzf "$SMOKE_ROOT/marcel-source.tar.gz" \
+            --strip-components=1 -C "$SMOKE_ROOT/source"
+
+      - name: Setup supported archive qualification toolchain
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: '0.9.24'
+
+      # Everything after the copy is disposable. candidate-controlled
+      # setup/build code cannot alter the immutable artifact retained by
+      # trusted-evidence.
+      - name: Run clean archive install and CLI smoke
+        env:
+          SMOKE_ROOT: ${{ runner.temp }}/stable-readiness/smoke
+        run: |
+          set -euo pipefail
+          UV_PROJECT_ENVIRONMENT="$SMOKE_ROOT/venv" \
+            uv sync --locked --no-dev --python 3.11 --no-progress \
+            --directory "$SMOKE_ROOT/source"
+          # CLI equivalent: marcel --version
+          "$SMOKE_ROOT/venv/bin/marcel" --version
+          "$SMOKE_ROOT/venv/bin/python" - <<'PY'
+          import acp_adapter
+          import agent
+          import marcel_cli
+          print(f"archive CLI import smoke passed: {marcel_cli.__version__}")
+          PY
+
+  historical-update-rollback:
+    name: Historical update and rollback evidence
+    needs: [resolve, smoke]
+    if: ${{ needs.smoke.result == 'success' }}
+    uses: ./.github/workflows/install-e2e-run.yml
+    with:
+      route: rollback
+      install-ref: ${{ needs.resolve.outputs.historical-sha }}
+      base-sha: ${{ needs.resolve.outputs.historical-sha }}
+      target-sha: ${{ needs.resolve.outputs.candidate-sha }}
+    permissions:
+      contents: read
+
+  summary:
+    name: Summarize isolated qualification evidence
+    needs: [resolve, trusted-evidence, smoke, historical-update-rollback]
+    if: ${{ always() && needs.trusted-evidence.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # This is a new runner and a new download. It consumes the original
+      # trusted artifact; it never rebuilds or re-verifies after candidate code.
+      - name: Download original trusted source evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: stable-readiness-source-${{ needs.resolve.outputs.candidate-sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/stable-readiness/original
+
+      - name: Write summary beside an unchanged evidence copy
+        env:
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate-sha }}
+          HISTORICAL_SHA: ${{ needs.resolve.outputs.historical-sha }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          HISTORICAL_RESULT: ${{ needs.historical-update-rollback.result }}
+          ORIGINAL_ROOT: ${{ runner.temp }}/stable-readiness/original
+          FINAL_ROOT: ${{ runner.temp }}/stable-readiness/final
+        run: |
+          set -euo pipefail
+          mkdir -p "$FINAL_ROOT"
+          cp "$ORIGINAL_ROOT/marcel-source.tar.gz" "$FINAL_ROOT/"
+          cp "$ORIGINAL_ROOT/SHA256SUMS" "$FINAL_ROOT/"
+          {
+            printf 'candidate-sha=%s\n' "$CANDIDATE_SHA"
+            printf 'historical-sha=%s\n' "$HISTORICAL_SHA"
+            printf 'archive-source=trusted-evidence-job\n'
+            printf 'smoke-result=%s\n' "$SMOKE_RESULT"
+            printf 'historical-update-rollback-result=%s\n' "$HISTORICAL_RESULT"
+          } >"$FINAL_ROOT/qualification-summary.txt"
+
+      - name: Upload final summary and original evidence copy
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stable-readiness-summary-${{ needs.resolve.outputs.candidate-sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/stable-readiness/final
+          if-no-files-found: error
+          retention-days: 14

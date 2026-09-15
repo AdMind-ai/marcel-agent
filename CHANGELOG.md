@@ -8,6 +8,13 @@ artifact has been announced yet.
 
 ## Unreleased
 
+- Added the [support matrix](docs/support-matrix.md), [update and rollback
+  guide](docs/update-rollback.md), and secret-free
+  [stable-readiness qualification workflow](.github/workflows/stable-readiness.yml).
+- Hardened release checksum generation so a tag cannot be labeled as a
+  different version. Qualification verifies reproducible source archives and
+  SHA-256 manifests without publishing artifacts.
+
 ## 0.21.0-rc.2
 
 ### Added
@@ -59,3 +66,8 @@ The first stable public release will include:
 - clean-install verification;
 - documented update and rollback procedures;
 - release notes linked to the corresponding tag.
+
+See the [support matrix](docs/support-matrix.md) and
+[update/rollback guide](docs/update-rollback.md) for the current operational
+boundaries. The stable-readiness workflow is evidence-only: signing,
+publishing, Docker, and site deployment remain separate operational gates.

@@ -127,6 +127,7 @@ jobs:
     with:
       route: update
       install-ref: ${{ matrix.install-ref }}
+      target-sha: ${{ github.sha }}
 
   # Re-running the curl one-liner over an existing checkout: autostash + pull
   # rather than the updater's own git handling.
@@ -142,6 +143,7 @@ jobs:
     with:
       route: installer
       install-ref: ${{ matrix.install-ref }}
+      target-sha: ${{ github.sha }}
 
   # A candidate is deliberately separate from the historical update matrix:
   # arbitrary candidate code is run with read-only contents access and no
