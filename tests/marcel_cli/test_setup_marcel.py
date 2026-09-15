@@ -16,6 +16,7 @@ from marcel_cli.setup_marcel import (
     ACTIVITY_CAPABILITY_DEFAULTS,
     MODEL_CHOICES,
     _choose_model,
+    _choose_direct_provider,
     _choose_capabilities,
     _choose_concurrency,
     _choose_memory_interval,
@@ -30,6 +31,7 @@ from marcel_cli.setup_marcel import (
     ensure_marcel_soul,
     normalize_account,
     normalize_agent_name,
+    _prompt_agent_name,
     normalize_secret_reference,
     setup_marcel,
 )
@@ -160,6 +162,8 @@ class MarcelSetupTests(unittest.TestCase):
     def choose(label, choices, _default=0, **_kwargs):
       if label == "Connection":
         return 1
+      if label == "API provider":
+        return 0
       if label == "Orchestrator model":
         return next(i for i, choice in enumerate(choices) if "Claude Sonnet 5" in choice)
       raise AssertionError(f"Unexpected choice prompt: {label}")
@@ -477,6 +481,51 @@ class MarcelSetupTests(unittest.TestCase):
       normalize_agent_name("\u202eunsafe")
     with self.assertRaises(ValueError):
       normalize_agent_name("")
+
+  def test_first_install_name_has_no_default_and_reprompts_on_blank(self):
+    class InitialNameSetup:
+      def __init__(self):
+        self.answers = ["", "Ren\u00e9e"]
+        self.prompts = []
+
+      def prompt(self, *args, **_kwargs):
+        self.prompts.append(args)
+        return self.answers.pop(0)
+
+      def print_error(self, _message):
+        return None
+
+      def _info(self, *_messages):
+        return None
+
+    setup = InitialNameSetup()
+    self.assertEqual(_prompt_agent_name(setup), "Ren\u00e9e")
+    self.assertEqual(setup.prompts, [("Agent name",), ("Agent name", "")])
+
+  def test_reconfigure_name_can_leave_blank_to_keep_existing(self):
+    class ExistingNameSetup:
+      def _info(self, *_messages):
+        return None
+
+      def prompt(self, *args, **_kwargs):
+        self.prompt_args = args
+        return ""
+
+    setup = ExistingNameSetup()
+    self.assertEqual(_prompt_agent_name(setup, "Marcel", reconfigure=True), "Marcel")
+    self.assertEqual(setup.prompt_args, ("Agent name", ""))
+
+  def test_direct_route_always_shows_explicit_provider_picker(self):
+    class ProviderSetup(_SetupStub):
+      def __init__(self):
+        super().__init__(2)
+
+    setup = ProviderSetup()
+    selected = _choose_direct_provider(setup, "")
+    self.assertEqual(selected[1], "gemini")
+    self.assertEqual(setup.seen_choices, [
+      "Anthropic", "OpenAI", "Google Gemini", "xAI Grok",
+    ])
 
   def test_legacy_empty_builder_name_keeps_marcel_compatibility(self):
     result = build_marcel_config({"router_mode": "marcel_router"})

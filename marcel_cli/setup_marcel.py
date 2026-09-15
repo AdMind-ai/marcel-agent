@@ -50,7 +50,6 @@ _MODEL_PROVIDER_ALIASES = {
     "gemini": "gemini",
     "xai": "xai",
 }
-FIRST_INSTALL_AGENT_NAME = "Nova"
 _MAX_AGENT_NAME_LENGTH = 128
 
 # Curated aliases from the providers' public model catalogs. Keep this intentionally short:
@@ -300,11 +299,12 @@ def _prompt_agent_name(setup: Any, existing_name: str = "", *, reconfigure: bool
             return current
     else:
         setup._info(
-            f"Agent name: press Enter to use the proposed name “{FIRST_INSTALL_AGENT_NAME}”.",
+            "Agent name (for example, Nova). A name is required on first install; "
+            "pressing Enter will ask again.",
             None,
         )
         question = "Agent name"
-        answer = setup.prompt(question, FIRST_INSTALL_AGENT_NAME)
+        answer = setup.prompt(question)
     while True:
         try:
             return normalize_agent_name(answer)
@@ -833,9 +833,16 @@ def _choose_model(
     allow_automatic: bool = False,
     activity: str = "",
     live_models: list[dict[str, Any]] | None = None,
+    provider: str = "",
 ) -> str:
     """Show a compact provider-grouped catalog while retaining a custom-ID escape hatch."""
     catalog = _catalog_for_activity(activity, live_models)
+    if provider and not live_models:
+        provider_catalog = [
+            item for item in catalog if _direct_provider_for_model(item[1]) == provider
+        ]
+        if provider_catalog:
+            catalog = provider_catalog
     values = [model_id for _, model_id in catalog]
     choices = [f"{title}  [{model_id}]" for title, model_id in catalog]
     if allow_automatic:
@@ -857,6 +864,24 @@ def _direct_provider_for_model(model_id: str) -> str:
     if not separator:
         return ""
     return _MODEL_PROVIDER_ALIASES.get(prefix.lower(), "")
+
+
+def _choose_direct_provider(setup: Any, current: str = "") -> tuple[str, str, str, str, str]:
+    """Explicitly choose a known direct provider before its model picker.
+
+    ``DIRECT_PROVIDERS`` is the single known-provider registry used by setup and runtime
+    credential wiring.  The picker is always shown for a direct route, including first install,
+    so no provider is silently selected from tuple order.
+    """
+    provider_ids = [item[1] for item in DIRECT_PROVIDERS]
+    default = provider_ids.index(current) if current in provider_ids else 0
+    selected = setup.prompt_choice(
+        "API provider",
+        [item[0] for item in DIRECT_PROVIDERS],
+        default,
+        description="Choose the provider that owns the API key and model catalog for this route.",
+    )
+    return DIRECT_PROVIDERS[selected]
 
 
 def _required_direct_providers(values: dict[str, Any]) -> list[str]:
@@ -1379,23 +1404,9 @@ def setup_marcel(config: dict) -> None:
     handled_direct_providers: set[str] = set()
     live_models: list[dict[str, Any]] = list(existing_live_models)
     if values["router_mode"] == "direct_provider":
-        provider_ids = [item[1] for item in DIRECT_PROVIDERS]
-        # Select/connect the provider before showing any model picker.  Existing configurations
-        # retain their provider; a brand-new direct setup starts with the first native provider
-        # and can still choose a different model/provider in the next prompt.
-        selected_provider = values["direct_provider"] if values["direct_provider"] in provider_ids else provider_ids[0]
-        if selected_provider in provider_ids:
-            provider = DIRECT_PROVIDERS[provider_ids.index(selected_provider)]
+        provider = _choose_direct_provider(setup, values["direct_provider"])
         _, provider_id, key_env, base_url, api_mode = provider
         values.update(direct_provider=provider_id, api_key_ref=key_env, base_url=base_url, api_mode=api_mode)
-        api_key = setup.prompt(f"{provider[0]} API key", password=True)
-        if api_key:
-            setup.save_env_value(key_env, api_key)
-            setup.print_success(f"{provider[0]} API key saved securely as {key_env}.")
-        elif not setup.get_env_value(key_env):
-            setup.print_error(f"No API key configured for {provider[0]}.")
-            return
-        handled_direct_providers.add(provider_id)
     else:
         values["base_url"] = setup.prompt(
             "Marcel Router base URL" if values["router_mode"] == "marcel_router"
@@ -1469,7 +1480,10 @@ def setup_marcel(config: dict) -> None:
     # Main-agent model policy is deliberately after provider/Router validation and discovery.
     # A failed connection can therefore be retried without replaying unrelated model prompts.
     orchestrator_model = _choose_model(
-        setup, "Orchestrator model", current_orchestrator_model, live_models=live_models)
+        setup, "Orchestrator model", current_orchestrator_model,
+        live_models=live_models,
+        provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "",
+    )
     orchestrator_fallbacks = _choose_fallback_models(
         setup, "general", orchestrator_model, live_models=live_models)
     values["orchestrator_model"] = orchestrator_model
@@ -1477,21 +1491,16 @@ def setup_marcel(config: dict) -> None:
     values["available_models"] = _choose_available_models(
         setup, orchestrator_model, orchestrator_fallbacks, live_models=live_models)
     if values["router_mode"] == "direct_provider":
-        inferred_provider = _direct_provider_for_model(orchestrator_model)
         provider_specs = {item[1]: item for item in DIRECT_PROVIDERS}
-        if inferred_provider in provider_specs and inferred_provider != values["direct_provider"]:
-            # Keep the native runtime provider consistent when a user picks a model from another
-            # direct catalog. The primary provider was connected before the picker; this secondary
-            # connection is immediate and still precedes image/sub-agent setup.
-            spec = provider_specs[inferred_provider]
-            values.update(
-                direct_provider=inferred_provider,
-                api_key_ref=spec[2],
-                base_url=spec[3],
-                api_mode=spec[4],
-            )
-            handled_direct_providers = _connect_required_direct_providers(
-                setup, values, skip=handled_direct_providers)
+        provider = provider_specs[values["direct_provider"]]
+        api_key = setup.prompt(f"{provider[0]} API key", password=True)
+        if api_key:
+            setup.save_env_value(provider[2], api_key)
+            setup.print_success(f"{provider[0]} API key saved securely as {provider[2]}.")
+        elif not setup.get_env_value(provider[2]):
+            setup.print_error(f"No API key configured for {provider[0]}.")
+            return
+        handled_direct_providers.add(values["direct_provider"])
     if values["router_mode"] == "direct_provider":
         # Main fallback credentials are part of main-agent completion; do not defer them until
         # after specialist prompts.
