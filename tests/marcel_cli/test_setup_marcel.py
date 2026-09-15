@@ -16,12 +16,14 @@ from marcel_cli.setup_marcel import (
     ACTIVITY_CAPABILITY_DEFAULTS,
     MODEL_CHOICES,
     _choose_model,
+    _choose_available_models,
     _choose_direct_provider,
     _choose_capabilities,
     _choose_concurrency,
     _choose_memory_interval,
     _fallback_catalog,
     _generation_catalog,
+    _vision_catalog,
     _normalize_router_models,
     _catalog_for_activity,
     _confirm_fallback_order,
@@ -37,6 +39,8 @@ from marcel_cli.setup_marcel import (
     _validate_custom_endpoint_url,
     _validate_router_url,
     _mode_connection_defaults,
+    _normalized_router_origin,
+    _provider_for_selected_model,
     normalize_secret_reference,
     setup_marcel,
 )
@@ -48,6 +52,7 @@ class _SetupStub:
     self.choice = choice
     self.custom = custom
     self.seen_choices = []
+    self.pre_selected = []
 
   def prompt_choice(self, _label, choices, _default, **_kwargs):
     self.seen_choices = choices
@@ -57,6 +62,7 @@ class _SetupStub:
     return self.custom
 
   def prompt_checklist(self, _label, _items, pre_selected=None):
+    self.pre_selected = list(pre_selected or [])
     return list(pre_selected or [])
 
 
@@ -547,9 +553,34 @@ class MarcelSetupTests(unittest.TestCase):
     ]
     catalog = _catalog_for_activity("image", live)
     labels = [label for label, _ in catalog]
-    self.assertIn("Image generation/editing — vendor/generator", labels)
-    self.assertIn("Image analysis (vision) — vendor/vision", labels)
+    self.assertIn("Router — image generation/editing — vendor/generator", labels)
+    self.assertNotIn("vendor/vision", [model_id for _, model_id in catalog])
     self.assertNotIn("vendor/unknown", [model_id for _, model_id in catalog])
+
+  def test_available_models_preselect_existing_union_primary_and_fallbacks(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [MODEL_CHOICES[1][1]],
+      current=[MODEL_CHOICES[2][1]],
+    )
+    self.assertEqual(
+      setup.pre_selected,
+      [index for index, item in enumerate(MODEL_CHOICES)
+       if item[1] in {MODEL_CHOICES[0][1], MODEL_CHOICES[1][1], MODEL_CHOICES[2][1]}],
+    )
+    self.assertEqual(
+      selected,
+      [item[1] for item in MODEL_CHOICES
+       if item[1] in {MODEL_CHOICES[0][1], MODEL_CHOICES[1][1], MODEL_CHOICES[2][1]}],
+    )
+
+  def test_router_origin_normalization_is_stable(self):
+    self.assertEqual(
+      _normalized_router_origin("https://Router.Example.test:443/v1/"),
+      "https://router.example.test/v1",
+    )
 
   def test_live_router_metadata_keeps_provider_owner_and_preview(self):
     entries = _normalize_router_models({
@@ -603,6 +634,36 @@ class MarcelSetupTests(unittest.TestCase):
       [model_id for _, model_id in _generation_catalog(live)],
       ["generator"],
     )
+
+  def test_vision_catalog_requires_explicit_capability_and_stays_separate(self):
+    live = [
+      {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
+      {"id": "vision", "metadata": {"capabilities": ["vision"]}},
+    ]
+    self.assertEqual([item[1] for item in _vision_catalog(live)], ["vision"])
+    self.assertEqual([item[1] for item in _generation_catalog(live)], ["generator"])
+
+  def test_registered_image_model_keeps_its_provider(self):
+    self.assertEqual(
+      _provider_for_selected_model("fal-ai/flux-2/klein/9b", {}, "openai-api"),
+      "fal",
+    )
+
+  def test_image_worker_serialization_keeps_fal_provider(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": [],
+      "workers": [{
+        "id": "artist",
+        "activity": "image",
+        "model": "fal-ai/flux-2/klein/9b",
+        "fallbacks": ["fal-ai/flux-2/klein/9b"],
+      }],
+    })
+    self.assertEqual(config["delegation"]["workers"]["artist"]["provider"], "fal")
 
   def test_fallback_runtime_schema_replaces_legacy_key_in_order(self):
     config = {

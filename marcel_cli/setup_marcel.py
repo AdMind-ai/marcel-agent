@@ -347,6 +347,22 @@ def _validate_custom_endpoint_url(base_url: str) -> str:
     return value
 
 
+def _normalized_router_origin(base_url: str) -> str:
+    """Normalize a Router API origin for safe key reuse comparisons."""
+    try:
+        value = _validate_router_url(base_url)
+    except ValueError:
+        return ""
+    parsed = urlsplit(value)
+    host = parsed.hostname.lower() if parsed.hostname else ""
+    port = parsed.port
+    if port and not ((parsed.scheme == "https" and port == 443) or
+                     (parsed.scheme == "http" and port == 80)):
+        host = f"{host}:{port}"
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{host}{path}"
+
+
 def _normalize_router_models(payload: Any) -> list[dict[str, Any]]:
     """Return the live Router entries, retaining only safe model metadata."""
     models = payload.get("data") if isinstance(payload, dict) else None
@@ -626,7 +642,7 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
         "model_registry": [
             {
                 "model": model,
-                "provider": _direct_provider_for_model(model),
+                "provider": _provider_for_selected_model(model, values, ""),
             }
             for model in available_models
         ],
@@ -754,7 +770,7 @@ def apply_marcel_config(config: dict[str, Any], values: dict[str, Any]) -> dict[
             continue
         worker = normalize_worker(raw_worker)
         worker_id = worker.pop("id")
-        worker["provider"] = _direct_provider_for_model(worker.get("model", "")) or provider_id
+        worker["provider"] = _provider_for_selected_model(worker.get("model", ""), values, provider_id)
         workers[worker_id] = worker
     delegation["workers"] = workers
     delegation.setdefault("worker_routing", {"strategy": "cheapest_capable", "default_worker": ""})
@@ -850,6 +866,12 @@ def _catalog_for_activity(
     activity: str = "", live_models: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, str]]:
     """Build one canonical picker source for primary, available, and fallback choices."""
+    if activity == "image":
+        # Legacy activity='image' means generation/editing.  Vision is intentionally
+        # never mixed into this lane because the runtime has no separate vision activity.
+        return _generation_catalog(live_models)
+    if activity == "vision":
+        return _vision_catalog(live_models)
     if live_models:
         entries: list[tuple[str, str]] = []
         for entry in live_models:
@@ -857,20 +879,7 @@ def _catalog_for_activity(
             if not model_id:
                 continue
             capabilities = _model_capabilities(entry)
-            if activity == "image":
-                if not ({"image_generation", "image_editing", "vision"} & capabilities):
-                    continue
-                if "image_generation" in capabilities or "image_editing" in capabilities:
-                    route = "Image generation/editing"
-                elif "vision" in capabilities:
-                    route = "Image analysis (vision)"
-                else:
-                    route = "Image route — capability metadata unavailable"
-                provider = str(entry.get("provider") or entry.get("owned_by") or "").strip()
-                preview = " [preview]" if entry.get("preview") else ""
-                identity = f"{provider} / {model_id}" if provider else model_id
-                entries.append((f"{route} — {identity}{preview}", model_id))
-            elif activity == "video":
+            if activity == "video":
                 route = "Video generation" if "video_generation" in capabilities else (
                     "Video analysis" if "video" in capabilities else
                     "Video route — capability metadata unavailable"
@@ -880,10 +889,6 @@ def _catalog_for_activity(
                 entries.append((f"Router — {model_id}", model_id))
         if entries:
             return entries
-    if activity == "image":
-        registered_generation = _generation_catalog()
-        if registered_generation:
-            return registered_generation
     return list(ACTIVITY_MODEL_CHOICES.get(activity, MODEL_CHOICES))
 
 
@@ -915,6 +920,25 @@ def _generation_catalog(
         return []
 
 
+def _vision_catalog(
+    live_models: list[dict[str, Any]] | None = None,
+) -> list[tuple[str, str]]:
+    """Return only live models with explicit vision/image-analysis capability."""
+    if not live_models:
+        return []
+    result: list[tuple[str, str]] = []
+    for entry in live_models:
+        if not isinstance(entry, dict) or "vision" not in _model_capabilities(entry):
+            continue
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id:
+            continue
+        provider = str(entry.get("provider") or entry.get("owned_by") or "").strip()
+        identity = f"{provider} / {model_id}" if provider else model_id
+        result.append((f"Router — image analysis (vision) — {identity}", model_id))
+    return result
+
+
 def _choose_model(
     setup: Any,
     label: str,
@@ -927,18 +951,27 @@ def _choose_model(
 ) -> str:
     """Show a compact provider-grouped catalog while retaining a custom-ID escape hatch."""
     catalog = _catalog_for_activity(activity, live_models)
+    if not catalog:
+        setup.print_error(
+            "No compatible model with the required image capability is available."
+            if activity in {"image", "vision"} else
+            f"No model is available for the {activity or 'general'} route."
+        )
+        return ""
     if provider and not live_models:
         provider_catalog = [
             item for item in catalog if _direct_provider_for_model(item[1]) == provider
         ]
-        if provider_catalog:
-            catalog = provider_catalog
+        if not provider_catalog:
+            setup.print_error(f"No registered model is available for provider {provider}.")
+            return ""
+        catalog = provider_catalog
     values = [model_id for _, model_id in catalog]
     choices = [f"{title}  [{model_id}]" for title, model_id in catalog]
     if allow_automatic:
         choices.insert(0, "Automatic — let Marcel choose later")
         values.insert(0, "")
-    custom_enabled = not live_models
+    custom_enabled = not live_models and activity != "image"
     if custom_enabled:
         choices.append("Custom model ID…")
     default = values.index(current) if current in values else 0
@@ -954,6 +987,42 @@ def _direct_provider_for_model(model_id: str) -> str:
     if not separator:
         return ""
     return _MODEL_PROVIDER_ALIASES.get(prefix.lower(), "")
+
+
+def _registered_image_provider_for_model(model_id: str) -> str:
+    """Resolve a model ID through the registered image-generation catalog."""
+    model_id = str(model_id or "").strip()
+    if not model_id:
+        return ""
+    try:
+        from tools.image_generation_catalog import FAL_MODELS
+        if model_id in FAL_MODELS:
+            return "fal"
+    except Exception:
+        pass
+    try:
+        from agent.image_gen_registry import list_providers
+        for provider in list_providers():
+            models = provider.list_models() or []
+            if any(isinstance(item, dict) and str(item.get("id") or "") == model_id
+                   for item in models):
+                return str(getattr(provider, "name", "") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _provider_for_selected_model(
+    model_id: str, values: dict[str, Any], default: str,
+) -> str:
+    """Keep image models on their registered provider instead of the main LLM route."""
+    image_provider = _registered_image_provider_for_model(model_id)
+    if image_provider:
+        return image_provider
+    for entry in values.get("live_model_entries", []):
+        if isinstance(entry, dict) and str(entry.get("id") or "").strip() == str(model_id).strip():
+            return str(entry.get("provider") or entry.get("owned_by") or "").strip() or default
+    return _direct_provider_for_model(model_id) or default
 
 
 def _choose_direct_provider(setup: Any, current: str = "") -> tuple[str, str, str, str, str]:
@@ -997,15 +1066,17 @@ def _required_direct_providers(values: dict[str, Any]) -> list[str]:
 def _choose_available_models(
     setup: Any, primary: str, fallbacks: list[str], *,
     live_models: list[dict[str, Any]] | None = None,
+    current: list[str] | None = None,
 ) -> list[str]:
     """Choose the model pool Marcel may use for future orchestration."""
     catalog = _catalog_for_activity("", live_models)
-    current = set([primary, *fallbacks])
+    current_models = set(current or ())
+    current_models.update([primary, *fallbacks])
     selected = setup.prompt_checklist(
         "Choose all models Marcel may use for future orchestration",
         [f"{label}  [{model_id}]" for label, model_id in catalog],
         pre_selected=[
-            index for index, (_, model_id) in enumerate(catalog) if model_id in current
+            index for index, (_, model_id) in enumerate(catalog) if model_id in current_models
         ],
     )
     return [catalog[index][1] for index in selected]
@@ -1181,10 +1252,7 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
             "default": str(DEFAULT_MODEL),
         })
     except Exception:
-        providers.append({
-            "label": "FAL.ai — registered provider [unavailable]",
-            "id": "fal", "key_env": "FAL_KEY", "models": [], "default": "",
-        })
+        pass
     try:
         from agent.image_gen_registry import list_providers
         for image_provider in list_providers():
@@ -1208,7 +1276,9 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
                 available = bool(image_provider.is_available())
             except Exception:
                 available = False
-            state = "available" if available else "unavailable"
+            if not available:
+                continue
+            state = "available"
             providers.append({
                 "label": f"{provider_name} — registered provider [{state}]",
                 "id": provider_name, "key_env": "", "models": models, "default": model,
@@ -1216,15 +1286,14 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
     except Exception:
         pass
     if not providers:
-        providers = [{
-            "label": "No registered image provider [unavailable]",
-            "id": "", "key_env": "", "models": [], "default": "",
-        }]
+        setup.print_error("No registered image-generation provider is available.")
+        config.pop("image_gen", None)
+        return
     current = str((config.get("image_gen") or {}).get("provider") or "")
     default = next((i for i, item in enumerate(providers) if item["id"] == current), 0)
     selected = setup.prompt_choice(
         "Which image service should the main agent use by default?",
-        [f"{item['label']} [{'available' if (not item['key_env'] or setup.get_env_value(item['key_env'])) else 'requires direct provider connection'}]"
+        [f"{item['label']} [{'available' if (not item['key_env'] or setup.get_env_value(item['key_env'])) else 'key required'}]"
          for item in providers],
         default,
         description=(
@@ -1244,6 +1313,7 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
     )
     if not model_ids:
         setup.print_error(f"{label} has no registered image-generation model available.")
+        config.pop("image_gen", None)
         return
     model_choice = setup.prompt_choice(
         "Image generation/editing model",
@@ -1263,6 +1333,7 @@ def _choose_image_provider(setup: Any, config: dict[str, Any]) -> None:
         else:
             setup.print_error(
                 f"{label} was not connected. Image generation/editing remains unavailable.")
+            config.pop("image_gen", None)
             return
     if not provider or not model:
         setup.print_error("No registered image service is currently available.")
@@ -1275,7 +1346,7 @@ def _fallback_catalog(
 ) -> list[tuple[str, str]]:
     """Return capability-relevant fallbacks, with broad text choices and no duplicates."""
     activity_catalog = _generation_catalog(live_models) if activity == "image" else _catalog_for_activity(activity, live_models)
-    source = activity_catalog if activity in {"image", "video"} else (
+    source = activity_catalog if activity in {"image", "video", "vision"} else (
         *activity_catalog, *_catalog_for_activity("", live_models))
     result: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -1452,6 +1523,20 @@ to the user's goal; offer to complete it, but never interrupt unrelated work wit
 def _print_main_agent_summary(setup: Any, values: dict[str, Any], config: dict[str, Any]) -> None:
     """Show the completed main-agent choices before opening the sub-agent loop."""
     image = config.get("image_gen") if isinstance(config.get("image_gen"), dict) else {}
+    tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+    tts_provider = str(tts.get("provider") or "not configured")
+    tts_config = tts.get(tts_provider) if isinstance(tts.get(tts_provider), dict) else {}
+    voice = tts_config.get("voice") or tts_config.get("voice_id") or tts_config.get("model") or "default"
+    memory_enabled = values.get("memory_maintenance_enabled", True)
+    memory_interval = values.get("memory_maintenance_interval_hours", 6)
+    accounts = values.get("accounts") or []
+    account_labels = [
+        str(account.get("label") or account.get("name") or account.get("kind") or account.get("type"))
+        for account in accounts if isinstance(account, dict)
+    ]
+    video = config.get("video_gen") if isinstance(config.get("video_gen"), dict) else {}
+    web = config.get("web") if isinstance(config.get("web"), dict) else {}
+    search = values.get("web_backend") or web.get("backend") or "automatic"
     setup._info(
         "Main agent configured:",
         f"- Identity: {values.get('agent_name')}",
@@ -1460,6 +1545,13 @@ def _print_main_agent_summary(setup: Any, values: dict[str, Any], config: dict[s
         f"- Fallback order: {', '.join(values.get('orchestrator_fallback_models') or ()) or 'none'}",
         f"- Main image generation/editing default: "
         f"{image.get('provider') or 'unavailable'} / {image.get('model') or 'not configured'}",
+        f"- Voice: {tts_provider} / {voice}",
+        f"- Memory maintenance: {'enabled' if memory_enabled else 'disabled'}"
+        f"{f' every {memory_interval}h' if memory_enabled else ''}",
+        f"- Accounts: {', '.join(account_labels) if account_labels else 'none configured'}",
+        f"- Search: {search}; video: "
+        f"{video.get('provider') or 'not configured'} / {video.get('model') or 'not configured'}",
+        f"- Telegram/channels: {'configured' if values.get('telegram_requested') else 'not configured'}",
         None,
     )
 
@@ -1549,6 +1641,10 @@ def setup_marcel(config: dict) -> None:
                     model = f"{prefix}/{model}"
             current_orchestrator_fallbacks.append(model)
     routing = existing.get("routing") if isinstance(existing.get("routing"), dict) else {}
+    current_available_models = [
+        str(model).strip() for model in routing.get("available_models", [])
+        if str(model).strip()
+    ] if isinstance(routing.get("available_models"), list) else []
     existing_live_models = (
         routing.get("model_entries")
         if current_mode == "marcel_router" and isinstance(routing.get("model_entries"), list)
@@ -1587,7 +1683,23 @@ def setup_marcel(config: dict) -> None:
         )
         if values["router_mode"] == "marcel_router":
             key_env = values["api_key_ref"] or "MARCEL_ROUTER_API_KEY"
-            existing_router_key = setup.get_env_value(key_env)
+            stored_origin = _normalized_router_origin(router.get("base_url"))
+            prompted_origin = _normalized_router_origin(values["base_url"])
+            existing_router_key = ""
+            if existing and prompted_origin and stored_origin != prompted_origin:
+                setup._info(
+                    "Marcel Router origin changed",
+                    "The saved key will not be reused for a different Router origin.",
+                    None,
+                )
+                if not setup.prompt_yes_no(
+                    f"Trust the new Router origin {values['base_url']} and enter a fresh key?",
+                    False,
+                ):
+                    return
+                existing_router_key = ""
+            else:
+                existing_router_key = setup.get_env_value(key_env)
             while True:
                 if existing_router_key:
                     key_action = setup.prompt_choice(
@@ -1671,7 +1783,8 @@ def setup_marcel(config: dict) -> None:
     values["orchestrator_model"] = orchestrator_model
     values["orchestrator_fallback_models"] = orchestrator_fallbacks
     values["available_models"] = _choose_available_models(
-        setup, orchestrator_model, orchestrator_fallbacks, live_models=live_models)
+        setup, orchestrator_model, orchestrator_fallbacks,
+        live_models=live_models, current=current_available_models)
     if values["router_mode"] == "direct_provider":
         provider_specs = {item[1]: item for item in DIRECT_PROVIDERS}
         provider = provider_specs[values["direct_provider"]]
@@ -1790,6 +1903,7 @@ def setup_marcel(config: dict) -> None:
             })
 
     telegram_requested = setup.prompt_yes_no("Connect Telegram so you can test Marcel?", True)
+    values["telegram_requested"] = telegram_requested
     if telegram_requested:
         from marcel_cli.setup_platforms import _setup_telegram
         _setup_telegram()
