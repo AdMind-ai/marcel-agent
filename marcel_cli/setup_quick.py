@@ -57,8 +57,9 @@ def _run_nous_flow(config: dict, *, context: str, cancel_exc: tuple, cancel_line
 def _run_portal_one_shot(config: dict) -> None:
     """One-shot Nous Portal setup (``marcel setup --portal`` / ``marcel portal``)."""
     from marcel_cli.setup import _info, _print_banner, print_error, print_info, print_success
-    _print_banner("│     ⚕ Marcel Setup — Nous Portal (one-shot)             │")
-    _info(None, "  One subscription, 300+ models, plus the Tool Gateway:",
+    _print_banner("│             ⚕ Marcel Setup (one-shot)                   │")
+    _info(None, "  Sign in through Nous Portal for provider access.",
+          "  One subscription, 300+ models, plus the Tool Gateway:",
           "    web search, image generation, TTS, browser automation",
           "    — all routed through your Nous Portal sub.", None,
           "  Sign up: https://portal.nousresearch.com/manage-subscription", None)
@@ -82,15 +83,17 @@ def _run_portal_one_shot(config: dict) -> None:
 
 
 def _run_first_time_quick_setup(config: dict, marcel_home, is_existing: bool):
-    """Streamlined first-time setup via Nous Portal: OAuth, model, terminal & messaging;
-    everything else gets defaults."""
+    """Streamlined first-time setup: sign in through Nous Portal for OAuth, model, terminal and
+    messaging; everything else gets defaults."""
     from marcel_cli.setup import (
         _apply_default_agent_settings, _info, print_header, print_info, _print_setup_summary, print_success,
         print_warning, prompt_choice, save_config, setup_gateway, setup_terminal_backend
     )
-    # Step 1: Nous Portal — OAuth login + model selection (provider set to "nous" by the save).
-    print_header("Nous Portal", gap=True)
-    _info("One subscription, 300+ models, plus the Tool Gateway:",
+    # Step 1: sign in through Nous Portal — OAuth login + model selection (provider set to
+    # "nous" by the save).  The portal is the provider/auth service, not the product identity.
+    print_header("Quick setup", gap=True)
+    _info("Sign in through Nous Portal for provider access:",
+          "  One subscription, 300+ models, plus the Tool Gateway:",
           "  web search, image generation, TTS, browser automation.",
           "Sign up: https://portal.nousresearch.com/manage-subscription", None)
 

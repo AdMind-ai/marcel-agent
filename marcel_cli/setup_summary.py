@@ -223,7 +223,7 @@ def _print_setup_summary(config: dict, marcel_home):
         _setup.print_warning("No inference provider is configured — Marcel cannot chat yet.")
         _setup._info("  Finish this one step with either of:",
               "    marcel model            (pick any provider/model)",
-              "    marcel setup --portal   (Nous Portal OAuth, no API key)")
+              "    marcel setup --portal   (sign in through Nous Portal, no API key)")
 
     print()
     _setup.print_header("Tool Availability Summary")

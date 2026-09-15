@@ -16,19 +16,38 @@ from marcel_cli.setup_marcel import (
     ACTIVITY_CAPABILITY_DEFAULTS,
     MODEL_CHOICES,
     _choose_model,
+    _choose_available_models,
+    _choose_direct_provider,
     _choose_capabilities,
     _choose_concurrency,
     _choose_memory_interval,
     _fallback_catalog,
+    _generation_catalog,
+    _vision_catalog,
+    _direct_vision_catalog,
+    _direct_model_capabilities,
+    _worker_llm_catalog,
+    _normalize_router_models,
+    _catalog_for_activity,
+    _confirm_fallback_order,
     _connect_required_direct_providers,
     _direct_provider_for_model,
     _required_direct_providers,
+    build_marcel_config,
     apply_marcel_config,
     ensure_marcel_soul,
     normalize_account,
+    normalize_agent_name,
+    _prompt_agent_name,
+    _validate_custom_endpoint_url,
+    _validate_router_url,
+    _mode_connection_defaults,
+    _normalized_router_origin,
+    _provider_for_selected_model,
     normalize_secret_reference,
     setup_marcel,
 )
+from marcel_cli.fallback_config import get_fallback_chain
 
 
 class _SetupStub:
@@ -36,6 +55,8 @@ class _SetupStub:
     self.choice = choice
     self.custom = custom
     self.seen_choices = []
+    self.seen_checklist = []
+    self.pre_selected = []
 
   def prompt_choice(self, _label, choices, _default, **_kwargs):
     self.seen_choices = choices
@@ -45,6 +66,8 @@ class _SetupStub:
     return self.custom
 
   def prompt_checklist(self, _label, _items, pre_selected=None):
+    self.seen_checklist = list(_items)
+    self.pre_selected = list(pre_selected or [])
     return list(pre_selected or [])
 
 
@@ -156,6 +179,8 @@ class MarcelSetupTests(unittest.TestCase):
     def choose(label, choices, _default=0, **_kwargs):
       if label == "Connection":
         return 1
+      if label == "API provider":
+        return 0
       if label == "Orchestrator model":
         return next(i for i, choice in enumerate(choices) if "Claude Sonnet 5" in choice)
       raise AssertionError(f"Unexpected choice prompt: {label}")
@@ -208,6 +233,149 @@ class MarcelSetupTests(unittest.TestCase):
             ("OPENAI_API_KEY", "openai-test-value"),
         ],
     )
+
+  def test_scripted_router_flow_validates_catalog_before_model_and_finishes_zero_workers(self):
+    events = []
+
+    def choose(label, choices, _default=0, **_kwargs):
+      events.append(label)
+      if label == "Connection":
+        return 0
+      return 0
+
+    def checklist(label, choices, pre_selected=None):
+      events.append(label)
+      return [] if label == "Choose fallback models (used in this order)" else list(pre_selected or [])
+
+    def text_prompt(label, default=None, password=False):
+      events.append(label)
+      if label == "Agent name":
+        return "RouterAgent"
+      if label == "Marcel Router base URL":
+        return "https://marcel-agent.com/api/v1"
+      if label == "Marcel Routing API key":
+        return "router-test-value"
+      return default or ""
+
+    def yes_no(label, default=True):
+      events.append(label)
+      return False
+
+    live = [{
+      "id": "vendor/chat",
+      "owned_by": "vendor",
+      "metadata": {"capabilities": ["chat", "tools"]},
+    }]
+
+    def discover(url, key):
+      events.append("Router catalog discovered")
+      _validate_router_url(url)
+      self.assertEqual(key, "router-test-value")
+      return True, "catalog ready", live
+
+    with (
+        patch.object(setup_cli_module, "prompt_choice", side_effect=choose),
+        patch.object(setup_cli_module, "prompt_checklist", side_effect=checklist),
+        patch.object(setup_cli_module, "prompt", side_effect=text_prompt),
+        patch.object(setup_cli_module, "prompt_yes_no", side_effect=yes_no),
+        patch.object(setup_cli_module, "get_env_value", return_value=None),
+        patch.object(setup_cli_module, "save_env_value"),
+        patch.object(setup_cli_module, "save_config"),
+        patch.object(setup_cli_module, "print_header"),
+        patch.object(setup_cli_module, "print_success"),
+        patch.object(setup_cli_module, "print_error"),
+        patch.object(setup_cli_module, "_info",
+                     side_effect=lambda *args: events.append(str(args[0]))),
+        patch("marcel_cli.setup_marcel._discover_marcel_router_models", side_effect=discover),
+        patch("marcel_cli.setup_tts._setup_tts_provider"),
+        patch("marcel_cli.setup_marcel._choose_voice_model"),
+        patch("marcel_cli.setup_marcel._choose_image_provider"),
+        patch("marcel_cli.setup_marcel.ensure_marcel_soul"),
+        patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"),
+    ):
+      config = {}
+      setup_marcel(config)
+
+    self.assertLess(events.index("Router catalog discovered"), events.index("Orchestrator model"))
+    self.assertLess(events.index("Main agent configured:"), events.index("Add a sub-agent?"))
+    self.assertEqual(config["delegation"]["workers"], {})
+
+  def test_scripted_direct_vision_flow_scopes_worker_model_and_runs_after_main_summary(self):
+    events = []
+    saved_env = []
+    model_calls = []
+    worker_added = {"value": False}
+
+    def choose(label, choices, _default=0, **_kwargs):
+      events.append(label)
+      if label == "Connection":
+        return 1
+      if label == "API provider":
+        return 1  # OpenAI
+      if label == "Sub-agent activity":
+        return 4  # explicit vision worker
+      if label == "Voice model":
+        return 0
+      return 0
+
+    def checklist(label, choices, pre_selected=None):
+      events.append(label)
+      if label == "Choose fallback models (used in this order)":
+        return []
+      return list(pre_selected or [])
+
+    def yes_no(label, default=True):
+      events.append(label)
+      if label == "Add a sub-agent?":
+        if not worker_added["value"]:
+          worker_added["value"] = True
+          return True
+        return False
+      return False
+
+    def text_prompt(label, default=None, password=False):
+      events.append(label)
+      if label == "Agent name":
+        return "VisionAgent"
+      if label == "OpenAI API key":
+        return "openai-test-value"
+      if label == "Sub-agent name":
+        return "VisionWorker"
+      return ""
+
+    def choose_model(_setup, label, *args, **kwargs):
+      model_calls.append((label, kwargs.get("activity"), kwargs.get("provider")))
+      return "openai/gpt-5.6-terra"
+
+    with (
+        patch.object(setup_cli_module, "prompt_choice", side_effect=choose),
+        patch.object(setup_cli_module, "prompt_checklist", side_effect=checklist),
+        patch.object(setup_cli_module, "prompt", side_effect=text_prompt),
+        patch.object(setup_cli_module, "prompt_yes_no", side_effect=yes_no),
+        patch.object(setup_cli_module, "get_env_value", return_value=None),
+        patch.object(setup_cli_module, "save_env_value",
+                     side_effect=lambda name, value: saved_env.append((name, value))),
+        patch.object(setup_cli_module, "save_config"),
+        patch.object(setup_cli_module, "print_header"),
+        patch.object(setup_cli_module, "print_success"),
+        patch.object(setup_cli_module, "print_error"),
+        patch.object(setup_cli_module, "_info",
+                     side_effect=lambda *args: events.append(str(args[0]))),
+        patch("marcel_cli.setup_tts._setup_tts_provider"),
+        patch("marcel_cli.setup_marcel._choose_voice_model"),
+        patch("marcel_cli.setup_marcel._choose_image_provider"),
+        patch("marcel_cli.setup_marcel._choose_model", side_effect=choose_model),
+        patch("marcel_cli.setup_marcel.ensure_marcel_soul"),
+        patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"),
+    ):
+      config = {}
+      setup_marcel(config)
+
+    self.assertIn(("OPENAI_API_KEY", "openai-test-value"), saved_env)
+    self.assertIn(("Sub-agent model for vision", "vision", "openai-api"), model_calls)
+    self.assertLess(events.index("Main agent configured:"), events.index("Add a sub-agent?"))
+    self.assertEqual(
+      config["delegation"]["workers"]["visionworker"]["provider"], "openai-api")
 
   def test_bare_legacy_entrypoint_cannot_fall_back_to_legacy_setup_menu(self):
     args = SimpleNamespace(
@@ -356,9 +524,9 @@ class MarcelSetupTests(unittest.TestCase):
     setup = _SetupStub(1)
     selected = _choose_model(
         setup, "Sub-agent model for image", allow_automatic=True, activity="image")
-    self.assertEqual(selected, ACTIVITY_MODEL_CHOICES["image"][0][1])
-    self.assertTrue(any("generation" in choice.lower() for choice in setup.seen_choices))
-    self.assertTrue(any("vision/reasoning" in choice.lower() for choice in setup.seen_choices))
+    self.assertIn(selected, [model_id for _, model_id in _worker_llm_catalog()])
+    self.assertTrue(any("chat/tool" in choice.lower() for choice in setup.seen_choices))
+    self.assertFalse(any("vision/reasoning" in choice.lower() for choice in setup.seen_choices))
     self.assertFalse(any("Claude Opus 5" in choice for choice in setup.seen_choices))
 
 
@@ -407,19 +575,21 @@ class MarcelSetupTests(unittest.TestCase):
     })
     self.assertEqual(config["model"], {
         "provider": "openai-api", "default": "gpt-5.6-terra"})
-    self.assertEqual(config["fallback_model"], [{
+    self.assertEqual(config["fallback_providers"], [{
         "provider": "gemini",
         "model": "gemini-3.7-flash",
         "key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "api_mode": "gemini",
     }])
+    self.assertNotIn("fallback_model", config)
 
 
   def test_media_fallbacks_stay_capability_specific(self):
     image_ids = [model_id for _, model_id in _fallback_catalog("image")]
     video_ids = [model_id for _, model_id in _fallback_catalog("video")]
-    self.assertTrue(any("image" in model_id for model_id in image_ids))
+    self.assertTrue(image_ids)
+    self.assertFalse(any(model_id.startswith("fal/") for model_id in image_ids))
     self.assertTrue(any("video" in model_id for model_id in video_ids))
     self.assertNotIn("anthropic/claude-opus-5", image_ids)
     self.assertNotIn("openai/gpt-5.6-luna", video_ids)
@@ -466,6 +636,431 @@ class MarcelSetupTests(unittest.TestCase):
     self.assertIn("busy CEO", soul)
     self.assertIn("plain everyday language", soul)
     self.assertNotIn("You are Marcel", soul)
+
+  def test_agent_name_is_unicode_normalized_and_control_safe(self):
+    self.assertEqual(normalize_agent_name("  Jose\u0301   😀 "), "Jos\u00e9 😀")
+    with self.assertRaises(ValueError):
+      normalize_agent_name("\u202eunsafe")
+    with self.assertRaises(ValueError):
+      normalize_agent_name("")
+
+  def test_first_install_name_has_no_default_and_reprompts_on_blank(self):
+    class InitialNameSetup:
+      def __init__(self):
+        self.answers = ["", "Ren\u00e9e"]
+        self.prompts = []
+
+      def prompt(self, *args, **_kwargs):
+        self.prompts.append(args)
+        return self.answers.pop(0)
+
+      def print_error(self, _message):
+        return None
+
+      def _info(self, *_messages):
+        return None
+
+    setup = InitialNameSetup()
+    self.assertEqual(_prompt_agent_name(setup), "Ren\u00e9e")
+    self.assertEqual(setup.prompts, [("Agent name",), ("Agent name", "")])
+
+  def test_reconfigure_name_can_leave_blank_to_keep_existing(self):
+    class ExistingNameSetup:
+      def _info(self, *_messages):
+        return None
+
+      def prompt(self, *args, **_kwargs):
+        self.prompt_args = args
+        return ""
+
+    setup = ExistingNameSetup()
+    self.assertEqual(_prompt_agent_name(setup, "Marcel", reconfigure=True), "Marcel")
+    self.assertEqual(setup.prompt_args, ("Agent name", ""))
+
+  def test_direct_route_always_shows_explicit_provider_picker(self):
+    class ProviderSetup(_SetupStub):
+      def __init__(self):
+        super().__init__(2)
+
+    setup = ProviderSetup()
+    selected = _choose_direct_provider(setup, "")
+    self.assertEqual(selected[1], "gemini")
+    self.assertEqual(setup.seen_choices, [
+      "Anthropic", "OpenAI", "Google Gemini", "xAI Grok",
+    ])
+
+  def test_legacy_empty_builder_name_keeps_marcel_compatibility(self):
+    result = build_marcel_config({"router_mode": "marcel_router"})
+    self.assertEqual(result["agent_name"], "Marcel")
+    self.assertEqual(result["orchestrator"]["name"], "Marcel")
+
+  def test_live_router_catalog_labels_image_routes_from_metadata(self):
+    live = [
+      {"id": "vendor/generator", "metadata": {"capabilities": ["image_generation"]}},
+      {"id": "vendor/vision", "metadata": {"capabilities": ["vision"]}},
+      {"id": "vendor/unknown", "metadata": {"capabilities": ["chat"]}},
+    ]
+    catalog = _catalog_for_activity("image", live)
+    labels = [label for label, _ in catalog]
+    self.assertNotIn("vendor/generator", [model_id for _, model_id in catalog])
+    self.assertNotIn("vendor/vision", [model_id for _, model_id in catalog])
+    self.assertIn("vendor/unknown", [model_id for _, model_id in catalog])
+
+  def test_available_models_preselect_existing_union_primary_and_fallbacks(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [MODEL_CHOICES[1][1]],
+      current=[MODEL_CHOICES[2][1]],
+    )
+    self.assertEqual(
+      setup.pre_selected,
+      [index for index, item in enumerate(MODEL_CHOICES)
+       if item[1] in {MODEL_CHOICES[0][1], MODEL_CHOICES[1][1], MODEL_CHOICES[2][1]}],
+    )
+    self.assertEqual(
+      selected,
+      [MODEL_CHOICES[2][1], MODEL_CHOICES[0][1], MODEL_CHOICES[1][1]],
+    )
+
+  def test_available_models_keeps_existing_id_missing_from_catalog(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [],
+      current=["legacy/custom-model"],
+    )
+    self.assertIn("legacy/custom-model", selected)
+    self.assertTrue(any("Existing/custom" in choice for choice in setup.seen_checklist))
+
+  def test_available_models_deduplicates_overlapping_current_primary_and_fallback(self):
+    setup = _SetupStub(0)
+    selected = _choose_available_models(
+      setup,
+      MODEL_CHOICES[0][1],
+      [MODEL_CHOICES[0][1], "legacy/custom-model"],
+      current=[MODEL_CHOICES[0][1], "legacy/custom-model"],
+    )
+    self.assertEqual(
+      selected,
+      [MODEL_CHOICES[0][1], "legacy/custom-model"],
+    )
+    self.assertEqual(len(selected), len(set(selected)))
+
+  def test_router_origin_normalization_is_stable(self):
+    self.assertEqual(
+      _normalized_router_origin("https://Router.Example.test:443/v1/"),
+      "https://router.example.test/v1",
+    )
+
+  def test_live_router_metadata_keeps_provider_owner_and_preview(self):
+    entries = _normalize_router_models({
+      "data": [{
+        "id": "vendor/vision-preview",
+        "owned_by": "vendor",
+        "preview": True,
+        "metadata": {"capabilities": ["vision"]},
+      }],
+    })
+    self.assertEqual(entries[0]["owned_by"], "vendor")
+    self.assertTrue(entries[0]["preview"])
+
+  def test_name_rejects_category_c_before_whitespace_normalization(self):
+    for value in ("a\nb", "a\rb", "a\tb", "a\033b", "a\u202eb", "a\u200bb"):
+      with self.assertRaises(ValueError):
+        normalize_agent_name(value)
+
+  def test_endpoint_transport_policy_is_mode_specific(self):
+    with self.assertRaises(ValueError):
+      _validate_router_url("http://router.example.test/v1")
+    with self.assertRaises(ValueError):
+      _validate_custom_endpoint_url("http://router.example.test/v1")
+    self.assertEqual(
+      _validate_custom_endpoint_url("http://127.0.0.1:8080/v1"),
+      "http://127.0.0.1:8080/v1",
+    )
+
+  def test_switching_connection_modes_does_not_reuse_router_secret_or_host(self):
+    router = {
+      "mode": "marcel_router",
+      "base_url": "https://router.example.test/v1",
+      "key_env": "MARCEL_ROUTER_API_KEY",
+    }
+    self.assertEqual(
+      _mode_connection_defaults(router, "marcel_router", "custom_endpoint"),
+      ("", "MARCEL_CUSTOM_API_KEY"),
+    )
+    self.assertEqual(
+      _mode_connection_defaults(router, "marcel_router", "direct_provider"),
+      ("", ""),
+    )
+
+  def test_generation_catalog_excludes_router_vision_and_unknown_entries(self):
+    live = [
+      {"id": "vision", "metadata": {"capabilities": ["vision", "chat"]}},
+      {"id": "unknown", "metadata": {"capabilities": ["chat"]}},
+      {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
+    ]
+    self.assertEqual(
+      [model_id for _, model_id in _generation_catalog(live)],
+      ["generator"],
+    )
+
+  def test_vision_catalog_requires_explicit_capability_and_stays_separate(self):
+    live = [
+      {"id": "generator", "metadata": {"capabilities": ["image_generation"]}},
+      {"id": "vision", "metadata": {"capabilities": ["vision", "chat"]}},
+    ]
+    self.assertEqual([item[1] for item in _vision_catalog(live)], ["vision"])
+    self.assertEqual([item[1] for item in _generation_catalog(live)], ["generator"])
+
+  def test_vision_worker_model_and_fallbacks_are_explicit_vision_only(self):
+    live = [
+      {"id": "chat", "metadata": {"capabilities": ["chat"]}},
+      {"id": "vision", "metadata": {"capabilities": ["chat"], "supports_vision": True}},
+    ]
+    self.assertEqual(
+      [model_id for _, model_id in _fallback_catalog("vision", live)],
+      ["vision"],
+    )
+
+  def test_direct_vision_catalog_uses_authoritative_mockable_capabilities(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = True
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      catalog = _direct_vision_catalog("openai-api")
+    self.assertTrue(catalog)
+    self.assertTrue(all(model_id.startswith("openai/") for _, model_id in catalog))
+
+  def test_direct_vision_catalog_fails_closed_for_pure_vision_metadata(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = False
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      self.assertEqual(_direct_vision_catalog("openai-api"), [])
+
+  def test_direct_vision_worker_picker_uses_direct_chat_catalog(self):
+    _direct_model_capabilities.cache_clear()
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = True
+
+    with patch("agent.models_dev.get_model_capabilities", return_value=Capabilities()):
+      selected = _choose_model(
+        _SetupStub(0),
+        "Vision worker model",
+        activity="vision",
+        provider="openai-api",
+      )
+    self.assertTrue(selected.startswith("openai/"))
+
+  def test_direct_capability_adapter_uses_models_dev_provider_and_bare_model(self):
+    _direct_model_capabilities.cache_clear()
+    calls = []
+
+    class Capabilities:
+      supports_vision = True
+      supports_tools = True
+
+    def lookup(*, provider, model, allow_network=False):
+      calls.append((provider, model, allow_network))
+      return Capabilities()
+
+    with patch("agent.models_dev.get_model_capabilities", side_effect=lookup):
+      _direct_vision_catalog("openai-api")
+    self.assertTrue(calls)
+    self.assertTrue(all(provider == "openai" for provider, _, _ in calls))
+    self.assertTrue(all("/" not in model for _, model, _ in calls))
+    self.assertTrue(all(allow_network for _, _, allow_network in calls))
+
+  def test_direct_vision_empty_cache_boundary_loads_network_registry(self):
+    from agent import models_dev
+
+    _direct_model_capabilities.cache_clear()
+    openai_models = {
+      model_id.split("/", 1)[1]: {
+        "tool_call": True,
+        "modalities": {"input": ["text", "image"]},
+      }
+      for _, model_id in MODEL_CHOICES if model_id.startswith("openai/")
+    }
+    fetches = []
+
+    def fetch_network_registry():
+      fetches.append(True)
+      return {"openai": {"models": openai_models}}
+
+    with (
+        patch.object(models_dev, "_models_dev_cache", {}),
+        patch.object(models_dev, "_models_dev_retry_after", 0),
+        patch.object(models_dev, "fetch_models_dev", side_effect=fetch_network_registry),
+    ):
+      catalog = _direct_vision_catalog("openai-api")
+    self.assertTrue(fetches)
+    self.assertTrue(catalog)
+
+  def test_registered_image_model_keeps_its_provider(self):
+    self.assertEqual(
+      _provider_for_selected_model("fal-ai/flux-2/klein/9b", {}, "openai-api"),
+      "fal",
+    )
+
+  def test_image_worker_serialization_keeps_llm_provider(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": [],
+      "workers": [{
+        "id": "artist",
+        "activity": "image",
+        "model": "fal-ai/flux-2/klein/9b",
+        "fallbacks": ["fal-ai/flux-2/klein/9b"],
+      }],
+    })
+    self.assertEqual(config["delegation"]["workers"]["artist"]["provider"], "openai-api")
+
+  def test_legacy_media_worker_migrates_to_llm_and_global_image_service(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": ["openai/gpt-5.6-luna"],
+      "workers": [{
+        "id": "artist", "activity": "image",
+        "model": "fal-ai/flux-2/klein/9b",
+        "fallbacks": ["fal-ai/gpt-image-2"],
+      }],
+    })
+    worker = config["delegation"]["workers"]["artist"]
+    llm_ids = {model_id for _, model_id in MODEL_CHOICES}
+    self.assertIn(worker["model"], llm_ids)
+    self.assertEqual(worker["fallback_models"], ["openai/gpt-5.6-luna"])
+    self.assertEqual(config["image_gen"]["provider"], "fal")
+    self.assertNotIn("fal-ai/flux-2/klein/9b", str(worker))
+    self.assertNotIn("fal-ai/gpt-image-2", str(worker))
+
+  def test_router_generation_only_worker_models_migrate_without_image_service_owner_guess(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "marcel_router",
+      "base_url": "https://marcel-agent.com/api/v1",
+      "api_key_ref": "MARCEL_ROUTER_API_KEY",
+      "orchestrator_model": "vendor/chat",
+      "orchestrator_fallback_models": ["vendor/chat-backup"],
+      "live_model_entries": [
+        {"id": "vendor/chat", "owned_by": "openai",
+         "metadata": {"capabilities": ["chat", "tools"]}},
+        {"id": "vendor/chat-backup", "owned_by": "openai",
+         "metadata": {"capabilities": ["chat", "tools"]}},
+        {"id": "vendor/image", "owned_by": "openai",
+         "metadata": {"capabilities": ["image_generation"]}},
+      ],
+      "workers": [{
+        "id": "artist", "activity": "image",
+        "model": "vendor/image", "fallbacks": ["vendor/image"],
+      }],
+    })
+    worker = config["delegation"]["workers"]["artist"]
+    self.assertEqual(worker["model"], "vendor/chat")
+    self.assertEqual(worker["fallback_models"], ["vendor/chat-backup"])
+    self.assertNotIn("image_gen", config)
+    self.assertNotIn("vendor/image", str(worker))
+
+  def test_router_worker_transport_stays_marcel_despite_owned_by_metadata(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "marcel_router",
+      "orchestrator_model": "vendor/chat",
+      "orchestrator_fallback_models": [],
+      "live_model_entries": [{
+        "id": "vendor/chat", "owned_by": "openai",
+        "metadata": {"capabilities": ["chat"]},
+      }],
+      "workers": [{
+        "id": "researcher", "activity": "general", "model": "vendor/chat",
+      }],
+    })
+    self.assertEqual(config["delegation"]["workers"]["researcher"]["provider"], "marcel")
+
+  def test_image_generation_worker_uses_llm_and_global_image_service(self):
+    config = apply_marcel_config({}, {
+      "agent_name": "TestAgent",
+      "router_mode": "direct_provider",
+      "direct_provider": "openai-api",
+      "orchestrator_model": "openai/gpt-5.6-terra",
+      "orchestrator_fallback_models": [],
+      "workers": [{
+        "id": "artist", "activity": "image_generation",
+        "model": "openai/gpt-5.6-terra",
+      }],
+    })
+    worker = config["delegation"]["workers"]["artist"]
+    self.assertEqual(worker["provider"], "openai-api")
+    self.assertEqual(worker["image_service"], "global")
+    self.assertIn("image_gen", worker["toolsets"])
+
+  def test_direct_image_generation_worker_uses_provider_scoped_llm_picker(self):
+    setup = _SetupStub(0)
+    selected = _choose_model(
+      setup,
+      "Image generation worker LLM",
+      activity="image_generation",
+      provider="openai-api",
+    )
+    self.assertTrue(selected.startswith("openai/"))
+    self.assertFalse(selected.startswith("fal"))
+
+  def test_fallback_runtime_schema_replaces_legacy_key_in_order(self):
+    config = {
+      "fallback_model": {"provider": "legacy", "model": "stale"},
+    }
+    apply_marcel_config(config, {
+      "agent_name": "TestAgent",
+      "router_mode": "marcel_router",
+      "base_url": "https://marcel-agent.com/api/v1",
+      "api_key_ref": "MARCEL_ROUTER_API_KEY",
+      "orchestrator_model": "demo/primary",
+      "orchestrator_fallback_models": ["demo/second", "demo/first"],
+      "workers": [],
+      "accounts": [],
+    })
+    self.assertEqual(
+      [item["model"] for item in config["fallback_providers"]],
+      ["demo/second", "demo/first"],
+    )
+    self.assertNotIn("stale", str(config))
+    self.assertNotIn("fallback_model", config)
+    self.assertEqual(
+      [item["model"] for item in get_fallback_chain(config)],
+      ["demo/second", "demo/first"],
+    )
+
+  def test_fallback_order_editor_reorders_selected_models(self):
+    class OrderingSetup(_SetupStub):
+      def _info(self, *_messages):
+        return None
+
+      def print_error(self, _message):
+        raise AssertionError("valid order should not error")
+
+      def prompt(self, _label, _default=""):
+        return "2,1"
+
+    options = [("First", "one"), ("Second", "two")]
+    self.assertEqual(_confirm_fallback_order(OrderingSetup(0), options, [0, 1]), [1, 0])
 
 
   def test_marcel_soul_replaces_only_the_untouched_upstream_default(self):
