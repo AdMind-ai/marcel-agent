@@ -115,7 +115,7 @@ jobs:
       # Build once, load into the local daemon for testing.  Cached
       # per-arch; the push step below reuses every layer from this build.
       - name: Build image (${{ matrix.arch }})
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -143,7 +143,7 @@ jobs:
       # cheapest path to coverage on every PR that touches docker code.
       # ---------------------------------------------------------------------
       - name: Install uv (for docker tests)
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # 10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # 10.2.0
         with:
           # Pinned: unpinned setup-uv fetches a 'latest' manifest from
           # raw.githubusercontent.com every job; transient fetch failures
@@ -233,7 +233,7 @@ jobs:
       # manifest list after both architecture publishers complete.
       - name: Push ${{ matrix.arch }} by digest
         id: push
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
