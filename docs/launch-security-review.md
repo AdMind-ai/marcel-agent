@@ -11,7 +11,8 @@ release commit before publishing a stable version.
 - Raise patched floors for PyJWT, urllib3, OAuthlib, Tornado, DOMPurify,
   fast-uri, brace-expansion, ip-address, undici, gRPC, Axios, simple-git, KaTeX,
   HTTP cache semantics, Joi, PostCSS selectors, shell-quote, source-map-js,
-  compression, proxy-addr, and Tinypool.
+  compression, proxy-addr, and Tinypool. Update global-agent to remove the
+  vulnerable sprintf-js/roarr tooling chain.
 - Keep the normal dependency age gate; exempt only the named security fixes.
 - Check every resolved copy in the lockfiles, not just package.json overrides.
 - Do not disable scanners or dismiss alerts to achieve a green result.
@@ -27,10 +28,9 @@ production or build untrusted repositories with privileged credentials.
 Recheck the upstream fix and the actual deployment boundary before stable;
 this finding is **not fixed or dismissed**.
 
-`sprintf-js` 1.1.3 also has an advisory with no patched release available.
-The root lockfile retains moderate findings propagated through its tooling
-parents. Do not describe the dependency audit as clean. Recheck upstream and
-verify the installed application's exposure before stable.
+The root npm dependency audit and Photon sidecar audit report zero findings
+after remediation. The website audit is **not clean** because of `braces`;
+passing CI alone must not be presented as a vulnerability-free release.
 
 PyJWT's new options-dictionary mutation advisory has no published patched
 version. Existing decode call sites construct fresh options per call; do not

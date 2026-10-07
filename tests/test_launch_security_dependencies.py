@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
             "fast-uri": (3, 1, 8),
             "ip-address": (10, 7, 2),
             "axios": (1, 20, 0),
+            "global-agent": (4, 1, 3),
             "simple-git": (4, 0, 2),
             "katex": (0, 18, 2),
         }),
