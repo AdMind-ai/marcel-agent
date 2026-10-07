@@ -124,6 +124,7 @@ def _build_child_agent(
     override_acp_args: Optional[List[str]] = None,
     # Legacy; accepted for wire compat but ignored (capability is depth-derived).
     role: str = "leaf",
+    strict_worker_permissions: bool = False,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair."""
@@ -142,7 +143,12 @@ def _build_child_agent(
     parent_subagent_id = getattr(parent_agent, "_subagent_id", None)
 
     delegation_cfg = _load_config()
-    child_toolsets, child_disabled_toolsets = _resolve_child_toolsets(parent_agent, toolsets, effective_role)
+    if strict_worker_permissions:
+        child_toolsets, child_disabled_toolsets = _resolve_child_toolsets(
+            parent_agent, toolsets or [], effective_role, strict=True,
+        )
+    else:
+        child_toolsets, child_disabled_toolsets = _resolve_child_toolsets(parent_agent, toolsets, effective_role)
     child_prompt = _build_child_system_prompt(
         goal, context, workspace_path=_resolve_workspace_hint(parent_agent), role=effective_role,
         max_spawn_depth=max_spawn, child_depth=child_depth,
@@ -302,6 +308,7 @@ def _build_children(
     task_list: List[Dict[str, Any]], task_schemas: List[Optional[Dict[str, Any]]], creds: Dict[str, Any], *,
     top_role: str, max_iterations: int, parent_agent, live_deleg_id: Optional[str], live_writers: list,
     worker_toolsets: Optional[List[str]] = None,
+    worker_config: Optional[Dict[str, Any]] = None,
 ) -> tuple[List[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe);
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
@@ -314,6 +321,15 @@ def _build_children(
         "override_max_tokens": creds.get("max_output_tokens"), "override_acp_command": creds.get("command"),
         "override_acp_args": creds.get("args"),
     }
+    if worker_config and worker_config.get("permissions") == "selected":
+        overrides["strict_worker_permissions"] = True
+        if worker_config.get("tools") and not worker_toolsets:
+            from toolsets import get_all_toolsets
+            requested = set(worker_config["tools"])
+            worker_toolsets = [
+                name for name, definition in get_all_toolsets().items()
+                if requested.intersection(definition.get("tools", []))
+            ]
     children = []
     for i, t in enumerate(task_list):
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
@@ -329,6 +345,10 @@ def _build_children(
             )
         except ValueError as exc:
             return [], str(exc)
+        if worker_config:
+            from tools.delegate_worker_limits import WorkerLimits, constrain_worker_tools
+            child._worker_limits = WorkerLimits(worker_config, parent_agent)
+            constrain_worker_tools(child, worker_config)
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema
@@ -417,7 +437,15 @@ def delegate_task(
         # Explicit-pin preflight failures (e.g. pinned delegation.command missing from PATH) refuse the
         # spawn loudly (#80450).
         return tool_error(str(exc))
-    max_children = worker_cfg.get("max_concurrency") if worker_cfg else _get_max_concurrent_children()
+    max_children = min(
+        worker_cfg.get("max_concurrency", _get_max_concurrent_children()), _get_max_concurrent_children(),
+    ) if worker_cfg else _get_max_concurrent_children()
+    if worker_cfg:
+        from tools.delegate_worker_registry import _BUDGET_FIELDS
+        has_budget = worker_cfg.get("budget") or any(field in worker_cfg for field in _BUDGET_FIELDS)
+        mode = creds.get("api_mode") or getattr(parent_agent, "api_mode", "")
+        if has_budget and mode in {"codex_app_server", "acp"}:
+            return tool_error("Worker budgets are not supported by this external agent transport.")
     task_list, err = _normalize_task_list(goal, context, tasks, output_schema, top_role, max_children)
     if not err:
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
@@ -438,6 +466,7 @@ def delegate_task(
         task_list, task_schemas, creds, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
         live_deleg_id=live_deleg_id, live_writers=live_writers,
         worker_toolsets=worker_cfg.get("toolsets") if worker_cfg else None,
+        worker_config=worker_cfg,
     )
     if err:
         return tool_error(err)

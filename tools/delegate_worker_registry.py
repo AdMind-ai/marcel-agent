@@ -17,6 +17,7 @@ accounting (budget fields).
 from __future__ import annotations
 
 import copy
+import math
 import re
 from typing import Any, Dict, Mapping, Optional
 
@@ -36,10 +37,13 @@ _FIELDS = frozenset({
     "activity", "role", "provider", "model", "tools", "toolsets",
     "max_concurrency", "max_iterations", "timeout_seconds", "fallback_models",
     "budget", *_BUDGET_FIELDS,
+    "permissions", "image_service",
 })
 
 
 def _has_secret_key(value: Any) -> bool:
+    if isinstance(value, (list, tuple)):
+        return any(_has_secret_key(item) for item in value)
     if not isinstance(value, Mapping):
         return False
     for key, child in value.items():
@@ -96,7 +100,7 @@ def _budget(value: Any, field: str = "budget") -> Dict[str, Any]:
                 parsed = float(raw)
             except (TypeError, ValueError) as exc:
                 raise WorkerConfigError(f"{field}.{key} must be a positive number") from exc
-            if parsed <= 0:
+            if not math.isfinite(parsed) or parsed <= 0:
                 raise WorkerConfigError(f"{field}.{key} must be a positive number")
             normalized[key] = parsed
         else:
@@ -116,6 +120,10 @@ def _validate_values(raw: Mapping[str, Any], *, worker_id: Optional[str] = None)
             continue
         if key in {"activity", "provider", "model"}:
             result[key] = _string(value, key)
+        elif key == "image_service":
+            if value != "global":
+                raise WorkerConfigError("image_service must be 'global'")
+            result[key] = value
         elif key == "role":
             role = _string(value, key).lower()
             if role not in _ROLES:
@@ -133,15 +141,23 @@ def _validate_values(raw: Mapping[str, Any], *, worker_id: Optional[str] = None)
                 timeout = float(value)
             except (TypeError, ValueError) as exc:
                 raise WorkerConfigError("timeout_seconds must be a number") from exc
-            if timeout < 0:
+            if not math.isfinite(timeout) or timeout < 0:
                 raise WorkerConfigError("timeout_seconds must be zero or a positive number")
             result[key] = timeout
         elif key == "budget":
             result[key] = _budget(value)
+        elif key == "permissions":
+            if not isinstance(value, str) or value not in {"inherit", "selected"}:
+                raise WorkerConfigError("permissions must be 'inherit' or 'selected'")
+            result[key] = value
         elif key in _BUDGET_FIELDS:
             result[key] = _budget({key: value}, "budget")[key]
     if worker_id is not None:
         result["id"] = worker_id
+    if result.get("permissions") == "selected" and not (
+        result.get("tools") or result.get("toolsets")
+    ):
+        raise WorkerConfigError("selected permissions require tools or toolsets")
     return result
 
 

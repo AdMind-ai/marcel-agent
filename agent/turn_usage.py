@@ -75,6 +75,12 @@ def record_response_usage(
     # Token/cost accounting below stays gated on real usage, but the request itself
     # must remain observable.
     agent.session_api_calls += 1
+    from tools.delegate_worker_limits import WorkerLimits
+    worker_limits = getattr(agent, "_worker_limits", None)
+    if isinstance(worker_limits, WorkerLimits):
+        worker_limits.observe_completed_attempt(
+            getattr(response, "usage", None), provider=agent.provider, api_mode=agent.api_mode,
+        )
     if not (hasattr(response, 'usage') and response.usage):
         if getattr(compressor, "awaiting_real_usage_after_compression", False):
             # No usage -> cannot adjudicate the prior compaction; consume the
@@ -194,6 +200,8 @@ def record_response_usage(
         _agg_cost_model, aggregator_usage, provider=_agg_cost_provider,
         base_url=_agg_cost_base_url, api_key=getattr(agent, "api_key", ""),
     )
+    if isinstance(worker_limits, WorkerLimits):
+        worker_limits.observe_cost(cost_result)
     # Cost delta = aggregator + MoA advisor cost (already priced per-advisor at each
     # advisor's own model rate), so state.db's estimated_cost_usd matches the folded
     # token counts.

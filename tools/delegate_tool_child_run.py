@@ -469,7 +469,9 @@ def _build_result_entry(
     # "(empty)" is run_agent's give-up sentinel after repeated empty LLM
     # responses (usually a transport bug) — a failure, not a success.
     usable_summary = bool(summary) and summary.strip() != "(empty)"
-    if result.get("interrupted", False):
+    if result.get("exit_reason") == "worker_budget":
+        status, exit_reason = "failed", "worker_budget"
+    elif result.get("interrupted", False):
         status, exit_reason = "interrupted", "interrupted"
     elif result.get("failed") or result.get("error"):
         # The loop returns the error text as final_response, which would otherwise read as "completed". Never report a
@@ -480,7 +482,7 @@ def _build_result_entry(
         # failure = budget exhaustion. A declared schema still violated after the bounded retry makes the summary
         # unusable under the contract, so status must not say completed (orchestrators reading only status/icon would
         # accept an empty verdict).
-        exit_reason = "completed" if result.get("completed", False) else "max_iterations"
+        exit_reason = result.get("exit_reason") or ("completed" if result.get("completed", False) else "max_iterations")
         status = "completed" if schema.valid is not False and usable_summary else "failed"
 
     _cost = getattr(child, "session_estimated_cost_usd", 0.0)
@@ -496,7 +498,7 @@ def _build_result_entry(
         "exit_reason": exit_reason,
         # A budget-exhausted child still returns a summary (status stays
         # "completed"), so the parent needs this explicit flag.
-        "truncated": exit_reason == "max_iterations",
+        "truncated": exit_reason in {"max_iterations", "worker_budget"},
         "tokens": {
             "input": _num(getattr(child, "session_prompt_tokens", 0)),
             "output": _num(getattr(child, "session_completion_tokens", 0)),
@@ -646,6 +648,17 @@ class _ChildRun:
         from tools.daemon_pool import DaemonThreadPoolExecutor
         child, task_index = self.child, self.task_index
         child_timeout = _get_child_timeout()
+        from tools.delegate_worker_limits import WorkerLimits
+        limits = getattr(child, "_worker_limits", None)
+        if not isinstance(limits, WorkerLimits):
+            limits = None
+        if limits is not None:
+            child_timeout = limits.deadline(child_timeout)
+            if not limits.admission.acquire(blocking=False):
+                return None, _fabricated_entry(
+                    task_index, "error", "Worker concurrency limit reached", child, 0,
+                ), False
+            limits.started = time.monotonic()
         executor = DaemonThreadPoolExecutor(
             max_workers=1, initializer=_set_subagent_approval_cb, initargs=(_get_subagent_approval_callback(),),
         )
@@ -661,6 +674,9 @@ class _ChildRun:
                 )
 
         future = executor.submit(contextvars.copy_context().run, _run_with_thread_capture)
+        if limits is not None:
+            # A timed-out child retains its slot until its thread actually exits.
+            future.add_done_callback(lambda _done: limits.admission.release())
         try:
             return future.result(timeout=child_timeout), None, False
         except Exception as wait_exc:

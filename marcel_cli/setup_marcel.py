@@ -419,6 +419,10 @@ def _normalize_router_models(payload: Any) -> list[dict[str, Any]]:
             "provider": str(raw.get("provider") or metadata.get("provider") or "").strip(),
             "owned_by": str(raw.get("owned_by") or metadata.get("owned_by") or "").strip(),
             "preview": bool(raw.get("preview") or metadata.get("preview")),
+            **{key: raw[key] for key in (
+                "available", "availability", "canonical_id", "alias_of", "is_alias",
+                "display_name", "capabilities",
+            ) if key in raw},
             "metadata": metadata,
         })
     return normalized
@@ -496,6 +500,11 @@ def _discover_marcel_router_models(base_url: str, api_key: str) -> tuple[bool, s
 
 def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
     """Normalize one worker for ``delegation.workers``."""
+    from tools.delegate_worker_registry import _FIELDS, _has_secret_key, _BUDGET_FIELDS, parse_workers
+    if _has_secret_key(worker):
+        raise ValueError("Worker declarations must not contain secrets")
+    if set(worker) - _FIELDS - {"id", "name", "concurrency", "fallbacks", "recommended"}:
+        raise ValueError("Worker declaration has unsupported fields")
     name = str(worker.get("id") or worker.get("name") or "").strip()
     activity = str(worker.get("activity") or "general").strip().lower()
     if not name:
@@ -506,7 +515,7 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
     if not worker_id or not worker_id[0].isalpha():
         worker_id = f"worker-{worker_id}" if worker_id else "worker"
     result: dict[str, Any] = {"id": worker_id, "activity": activity}
-    for key in ("provider", "model", "role"):
+    for key in ("provider", "model", "role", "permissions"):
         value = worker.get(key)
         if value not in (None, ""):
             if key == "model" and _registered_image_provider_for_model(str(value).strip()):
@@ -526,28 +535,25 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
             ]
             if cleaned:
                 result[target_key] = cleaned
+        elif value is not None:
+            raise ValueError(f"Worker {source_key} must be a list or comma-separated string")
     for source_key, target_key in (("concurrency", "max_concurrency"),
                                    ("max_concurrency", "max_concurrency"),
                                    ("max_iterations", "max_iterations"),
                                    ("timeout_seconds", "timeout_seconds")):
         value = worker.get(source_key)
         if value not in (None, ""):
-            try:
-                value = int(value)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"Worker {source_key} must be a whole number.") from exc
-            if value <= 0:
-                raise ValueError(f"Worker {source_key} must be positive.")
             result[target_key] = value
     budget = worker.get("budget")
     if isinstance(budget, dict):
-        cleaned_budget = {str(key): value for key, value in budget.items() if value not in (None, "")}
-        if cleaned_budget:
-            result["budget"] = cleaned_budget
+        result["budget"] = budget
     max_requests = worker.get("max_requests", budget if not isinstance(budget, dict) else None)
     if max_requests not in (None, ""):
-        result["budget"] = {"max_requests": _positive_int(max_requests, "Worker request budget")}
-    return result
+        result.setdefault("budget", {})["max_requests"] = max_requests
+    for field in _BUDGET_FIELDS - {"max_requests"}:
+        if field in worker:
+            result[field] = worker[field]
+    return parse_workers({worker_id: result})[worker_id]
 
 
 def normalize_account(account: dict[str, Any]) -> dict[str, Any]:
@@ -745,6 +751,14 @@ def _runtime_fallback_entries(values: dict[str, Any], marcel: dict[str, Any]) ->
 
 def apply_marcel_config(config: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     """Apply Marcel values to the native Marcel runtime sections."""
+    validated_ids: set[str] = set()
+    for raw_worker in values.get("workers", []):
+        if not isinstance(raw_worker, dict):
+            raise ValueError("Worker declarations must be mappings")
+        worker_id = normalize_worker(raw_worker)["id"]
+        if worker_id in validated_ids:
+            raise ValueError("Duplicate worker ID")
+        validated_ids.add(worker_id)
     marcel = build_marcel_config(values)
     config["marcel"] = marcel
     stt = config.setdefault("stt", {})
@@ -775,10 +789,10 @@ def apply_marcel_config(config: dict[str, Any], values: dict[str, Any]) -> dict[
     telegram_display["long_running_notifications"] = False
     telegram_display["busy_steer_ack_enabled"] = False
     approvals = config.setdefault("approvals", {})
-    approvals["mode"] = "off"
-    approvals["cron_mode"] = "approve"
-    approvals["single_query_mode"] = "approve"
-    approvals["unattended_mode"] = "approve"
+    approvals.setdefault("mode", "off")
+    approvals.setdefault("cron_mode", "approve")
+    approvals.setdefault("single_query_mode", "approve")
+    approvals.setdefault("unattended_mode", "approve")
 
     provider_id = marcel["orchestrator"]["provider"]
     router = marcel["router"]
@@ -915,6 +929,14 @@ def _catalog_for_activity(
     provider: str = "",
 ) -> list[tuple[str, str]]:
     """Build one canonical picker source for primary, available, and fallback choices."""
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, chat_models, model_label
+    if not live_models:
+        live_models = LIVE_SETUP_CATALOG.get()
+    if live_models is not None:
+        entries = chat_models(live_models)
+        if activity == "vision":
+            entries = [entry for entry in entries if "vision" in _model_capabilities(entry)]
+        return [(model_label(entry), entry["id"]) for entry in entries]
     if _is_image_generation_activity(activity):
         # Legacy activity='image' means an image-generation worker. Its LLM is a normal
         # chat/tool model; image_gen is supplied by the global image service.
@@ -1090,7 +1112,7 @@ def _choose_model(
             f"No model is available for the {activity or 'general'} route."
         )
         return ""
-    if provider and not live_models:
+    if provider and provider != "openrouter" and not live_models:
         provider_catalog = [
             item for item in catalog if _direct_provider_for_model(item[1]) == provider
         ]
@@ -1099,11 +1121,16 @@ def _choose_model(
             return ""
         catalog = provider_catalog
     values = [model_id for _, model_id in catalog]
-    choices = [f"{title}  [{model_id}]" for title, model_id in catalog]
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG
+    live = bool(live_models) or LIVE_SETUP_CATALOG.get() is not None
+    choices = [
+        title if live else f"{title} | availability unverified [{model_id}]"
+        for title, model_id in catalog
+    ]
     if allow_automatic:
         choices.insert(0, "Automatic — let Marcel choose later")
         values.insert(0, "")
-    custom_enabled = not live_models and activity != "vision"
+    custom_enabled = not live and activity != "vision"
     if custom_enabled:
         choices.append("Custom model ID…")
     default = values.index(current) if current in values else 0
@@ -1831,7 +1858,18 @@ def _mode_connection_defaults(
 
 
 def setup_marcel(config: dict) -> None:
-    """Interactively configure Marcel without ever collecting secret values."""
+    """Keep the account catalog scoped to this setup run, including early exits."""
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG
+    token = LIVE_SETUP_CATALOG.set(None)
+    try:
+        _setup_marcel(config)
+    finally:
+        LIVE_SETUP_CATALOG.reset(token)
+
+
+def _setup_marcel(config: dict) -> None:
+    """Interactively configure Marcel without logging or exposing secret values."""
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG
     # Resolve through setup at call time so setup's prompt helpers remain monkeypatchable.
     from marcel_cli import setup
 
@@ -1974,6 +2012,7 @@ def setup_marcel(config: dict) -> None:
                         values["base_url"], router_key)
                     if verified:
                         live_models = discovered
+                        LIVE_SETUP_CATALOG.set(discovered)
                         values["live_model_entries"] = discovered
                         if router_key != existing_router_key:
                             setup.save_env_value(key_env, router_key)
@@ -2153,70 +2192,8 @@ def setup_marcel(config: dict) -> None:
     # Everything owned by the main agent is complete before its summary and before specialists.
     _choose_image_provider(setup, config)
     _print_main_agent_summary(setup, values, config)
-    while setup.prompt_yes_no("Add a sub-agent?", default=False):
-        name = setup.prompt("Sub-agent name")
-        activity_index = setup.prompt_choice("Sub-agent activity", list(ACTIVITY_LABELS), 1)
-        activity = ACTIVITIES[activity_index]
-        sub_agent_model = _choose_model(
-            setup,
-            f"Sub-agent model for {activity}",
-            allow_automatic=True,
-            activity=activity,
-            live_models=live_models,
-            provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "",
-        )
-        if not sub_agent_model:
-            setup.print_error(
-                "This worker cannot be configured because no compatible LLM model is available."
-            )
-            continue
-        if _is_image_generation_activity(activity) or activity == "vision":
-            setup._info(
-                "Worker media context: the main agent owns the registered image service.",
-                "Image generation workers use their selected LLM plus the global image_gen tool; "
-                "vision workers use only models with explicit vision metadata.",
-                None,
-            )
-        if activity == "search" and not values.get("search_provider_configured"):
-            setup._info(
-                "Choose how this specialist searches the web.",
-                "This is separate from the AI model selected above.",
-                None,
-            )
-            search_provider = setup.prompt_choice(
-                "Web search source",
-                [
-                    "Brave Search — private web search (API key required)",
-                    "Automatic — use the best search engine already available",
-                ],
-                0,
-            )
-            if search_provider == 0:
-                brave_key = setup.prompt("Brave Search API key", password=True)
-                if brave_key:
-                    setup.save_env_value("BRAVE_SEARCH_API_KEY", brave_key)
-                    values["web_backend"] = "brave-free"
-                    setup.print_success("Brave Search connected securely.")
-                elif setup.get_env_value("BRAVE_SEARCH_API_KEY"):
-                    values["web_backend"] = "brave-free"
-                    setup.print_success("Using the existing Brave Search connection.")
-                else:
-                    setup.print_error(
-                        "No Brave Search API key was provided; Marcel will use automatic web search.")
-            values["search_provider_configured"] = True
-        fallback_models = _choose_fallback_models(
-            setup, activity, sub_agent_model, live_models=live_models,
-            provider=values["direct_provider"] if values["router_mode"] == "direct_provider" else "")
-        worker = {
-            "name": name,
-            "activity": activity,
-            "model": sub_agent_model,
-            "fallbacks": fallback_models,
-            "toolsets": _choose_capabilities(setup, activity),
-            "concurrency": _choose_concurrency(setup, activity),
-        }
-        values["workers"].append(worker)
-        _print_subagent_summary(setup, worker)
+    from marcel_cli.setup_workers import configure_workers
+    configure_workers(setup, values, live_models=live_models)
 
     if values["router_mode"] == "direct_provider":
         _connect_required_direct_providers(

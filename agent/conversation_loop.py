@@ -1368,8 +1368,25 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[Dict[str, Any]]:
             return None
         try:
             _run_phase(build_api_request, agent, s)
+            worker_limits = getattr(agent, "_worker_limits", None)
+            from tools.delegate_worker_limits import WorkerBudgetExceeded, WorkerLimits
+            if isinstance(worker_limits, WorkerLimits):
+                try:
+                    worker_limits.before_request(agent, s.api_kwargs)
+                except WorkerBudgetExceeded as exc:
+                    return {
+                        "completed": False, "exit_reason": "worker_budget",
+                        "final_response": str(exc), "messages": s.messages,
+                        "api_calls": s.api_call_count,
+                    }
             if _run_phase(perform_api_call, agent, s).action == "break":
                 return None
+            if isinstance(worker_limits, WorkerLimits):
+                worker_limits.observe_completed_attempt(
+                    getattr(getattr(s, "response", None), "usage", None),
+                    provider=getattr(agent, "provider", ""),
+                    api_mode=getattr(agent, "api_mode", ""),
+                )
             _rc = _run_phase(check_api_response, agent, s)
             if _rc.action == "return":
                 return _rc.result

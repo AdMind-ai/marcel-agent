@@ -649,6 +649,9 @@ def _dispatch_authorized_once(
             callback()
 
     block_message, block_error_type = scope_block, "tool_scope_block"
+    allowed_worker_tools = getattr(agent, "_worker_allowed_tools", None)
+    if isinstance(allowed_worker_tools, frozenset) and ref.name not in allowed_worker_tools:
+        block_message = "Tool is not permitted by this worker's selected permissions."
     if block_message is None:
         block_error_type = "plugin_block"
         resolve = lambda: _pre_tool_block(agent, ref)  # noqa: E731
