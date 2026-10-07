@@ -1,0 +1,40 @@
+name: Public Ubuntu Router pilot
+
+on:
+  push:
+    branches: ['qualification/router-rc4']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-release-pilot
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: router-qualification-rc4
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Prepare terminal driver
+        run: python3 -m pip install pexpect pyyaml
+      - name: Run anonymous public install and real Router wizard
+        env:
+          MARCEL_ROUTER_TEST_KEY: ${{ secrets.MARCEL_ROUTER_TEST_KEY }}
+          MARCEL_IMAGE_TEST_KEY: ${{ secrets.MARCEL_IMAGE_TEST_KEY }}
+        run: |
+          python3 scripts/qualification/router-release-pilot.py \
+            --tag v0.21.0-rc.4 \
+            --evidence "$RUNNER_TEMP/router-pilot-evidence.json"
+      - name: Retain only allowlisted evidence, never HOME or runtime logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-router-rc4-evidence
+          path: ${{ runner.temp }}/router-pilot-evidence.json
+          retention-days: 7
