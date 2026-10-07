@@ -10,100 +10,101 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-09-23T16:29:41.800721229Z"
 exclude-newer-span = "P14D"
 
 [options.exclude-newer-package]
-agent-client-protocol = "2099-01-01T00:00:00Z"
-ai-edge-litert = "2099-01-01T00:00:00Z"
-aiohttp = "2099-01-01T00:00:00Z"
-aiohttp-socks = "2099-01-01T00:00:00Z"
-aiosqlite = "2099-01-01T00:00:00Z"
-alibabacloud-dingtalk = "2099-01-01T00:00:00Z"
-anthropic = "2099-01-01T00:00:00Z"
-asyncpg = "2099-01-01T00:00:00Z"
-azure-identity = "2099-01-01T00:00:00Z"
-boto3 = "2099-01-01T00:00:00Z"
-brotlicffi = "2099-01-01T00:00:00Z"
-certifi = "2099-01-01T00:00:00Z"
-concurrent-log-handler = "2099-01-01T00:00:00Z"
-croniter = "2099-01-01T00:00:00Z"
-cryptography = "2099-01-01T00:00:00Z"
-daytona = "2099-01-01T00:00:00Z"
-debugpy = "2099-01-01T00:00:00Z"
-defusedxml = "2099-01-01T00:00:00Z"
-dingtalk-stream = "2099-01-01T00:00:00Z"
-discord-py = "2099-01-01T00:00:00Z"
-edge-tts = "2099-01-01T00:00:00Z"
 elevenlabs = "2099-01-01T00:00:00Z"
-exa-py = "2099-01-01T00:00:00Z"
-fal-client = "2099-01-01T00:00:00Z"
-fastapi = "2099-01-01T00:00:00Z"
-faster-whisper = "2099-01-01T00:00:00Z"
-fire = "2099-01-01T00:00:00Z"
-firecrawl-py = "2099-01-01T00:00:00Z"
-google-api-python-client = "2099-01-01T00:00:00Z"
-google-auth = "2099-01-01T00:00:00Z"
-google-auth-httplib2 = "2099-01-01T00:00:00Z"
-google-auth-oauthlib = "2099-01-01T00:00:00Z"
-hindsight-client = "2099-01-01T00:00:00Z"
-honcho-ai = "2099-01-01T00:00:00Z"
-httplib2 = "2099-01-01T00:00:00Z"
-httpx = "2099-01-01T00:00:00Z"
-httpx2 = "2099-01-01T00:00:00Z"
-jinja2 = "2099-01-01T00:00:00Z"
-lark-oapi = "2099-01-01T00:00:00Z"
-markdown = "2099-01-01T00:00:00Z"
-mautrix = "2099-01-01T00:00:00Z"
-mcp = "2099-01-01T00:00:00Z"
-mem0ai = "2099-01-01T00:00:00Z"
-microsoft-teams-apps = "2099-01-01T00:00:00Z"
-mistralai = "2099-01-01T00:00:00Z"
-modal = "2099-01-01T00:00:00Z"
-numpy = "2099-01-01T00:00:00Z"
-onnxruntime = "2099-01-01T00:00:00Z"
-openai = "2099-01-01T00:00:00Z"
-opentelemetry-exporter-otlp-proto-http = "2099-01-01T00:00:00Z"
-opentelemetry-sdk = "2099-01-01T00:00:00Z"
-openwakeword = "2099-01-01T00:00:00Z"
-packaging = "2099-01-01T00:00:00Z"
-parallel-web = "2099-01-01T00:00:00Z"
-pathspec = "2099-01-01T00:00:00Z"
-pillow = "2099-01-01T00:00:00Z"
-prompt-toolkit = "2099-01-01T00:00:00Z"
-psutil = "2099-01-01T00:00:00Z"
-pvporcupine = "2099-01-01T00:00:00Z"
-pyasn1 = "2099-01-01T00:00:00Z"
-pydantic = "2099-01-01T00:00:00Z"
-pyjwt = "2099-01-01T00:00:00Z"
-pytest = "2099-01-01T00:00:00Z"
-pytest-asyncio = "2099-01-01T00:00:00Z"
-python-dotenv = "2099-01-01T00:00:00Z"
-python-multipart = "2099-01-01T00:00:00Z"
-python-telegram-bot = "2099-01-01T00:00:00Z"
-pyyaml = "2099-01-01T00:00:00Z"
-qrcode = "2099-01-01T00:00:00Z"
-requests = "2099-01-01T00:00:00Z"
-rich = "2099-01-01T00:00:00Z"
-ruamel-yaml = "2099-01-01T00:00:00Z"
-ruff = "2099-01-01T00:00:00Z"
-sentencepiece = "2099-01-01T00:00:00Z"
 setuptools = "2099-01-01T00:00:00Z"
-sherpa-onnx = "2099-01-01T00:00:00Z"
-slack-bolt = "2099-01-01T00:00:00Z"
-slack-sdk = "2099-01-01T00:00:00Z"
-snowballstemmer = "2099-01-01T00:00:00Z"
-sounddevice = "2099-01-01T00:00:00Z"
+modal = "2099-01-01T00:00:00Z"
+pyyaml = "2099-01-01T00:00:00Z"
+numpy = "2099-01-01T00:00:00Z"
+pvporcupine = "2099-01-01T00:00:00Z"
 starlette = "2099-01-01T00:00:00Z"
-supermemory = "2099-01-01T00:00:00Z"
-tenacity = "2099-01-01T00:00:00Z"
-ty = "2099-01-01T00:00:00Z"
-tzdata = "2099-01-01T00:00:00Z"
-uvicorn = "2099-01-01T00:00:00Z"
-vercel = "2099-01-01T00:00:00Z"
+google-auth = "2099-01-01T00:00:00Z"
+aiohttp = "2099-01-01T00:00:00Z"
+mistralai = "2099-01-01T00:00:00Z"
+firecrawl-py = "2099-01-01T00:00:00Z"
+parallel-web = "2099-01-01T00:00:00Z"
+markdown = "2099-01-01T00:00:00Z"
+opentelemetry-sdk = "2099-01-01T00:00:00Z"
+prompt-toolkit = "2099-01-01T00:00:00Z"
+fastapi = "2099-01-01T00:00:00Z"
+anthropic = "2099-01-01T00:00:00Z"
+pathspec = "2099-01-01T00:00:00Z"
+openwakeword = "2099-01-01T00:00:00Z"
+defusedxml = "2099-01-01T00:00:00Z"
+ruff = "2099-01-01T00:00:00Z"
+exa-py = "2099-01-01T00:00:00Z"
+mcp = "2099-01-01T00:00:00Z"
 websockets = "2099-01-01T00:00:00Z"
 wheel = "2099-01-01T00:00:00Z"
+pytest = "2099-01-01T00:00:00Z"
+pillow = "2099-01-01T00:00:00Z"
+tenacity = "2099-01-01T00:00:00Z"
+pyjwt = "2099-01-01T00:00:00Z"
+slack-bolt = "2099-01-01T00:00:00Z"
+fal-client = "2099-01-01T00:00:00Z"
+asyncpg = "2099-01-01T00:00:00Z"
+boto3 = "2099-01-01T00:00:00Z"
+ruamel-yaml = "2099-01-01T00:00:00Z"
+sherpa-onnx = "2099-01-01T00:00:00Z"
+pytest-asyncio = "2099-01-01T00:00:00Z"
+slack-sdk = "2099-01-01T00:00:00Z"
+discord-py = "2099-01-01T00:00:00Z"
+honcho-ai = "2099-01-01T00:00:00Z"
+faster-whisper = "2099-01-01T00:00:00Z"
+packaging = "2099-01-01T00:00:00Z"
+certifi = "2099-01-01T00:00:00Z"
+debugpy = "2099-01-01T00:00:00Z"
+rich = "2099-01-01T00:00:00Z"
+supermemory = "2099-01-01T00:00:00Z"
 youtube-transcript-api = "2099-01-01T00:00:00Z"
+edge-tts = "2099-01-01T00:00:00Z"
+microsoft-teams-apps = "2099-01-01T00:00:00Z"
+aiohttp-socks = "2099-01-01T00:00:00Z"
+ai-edge-litert = "2099-01-01T00:00:00Z"
+onnxruntime = "2099-01-01T00:00:00Z"
+croniter = "2099-01-01T00:00:00Z"
+opentelemetry-exporter-otlp-proto-http = "2099-01-01T00:00:00Z"
+azure-identity = "2099-01-01T00:00:00Z"
+lark-oapi = "2099-01-01T00:00:00Z"
+sentencepiece = "2099-01-01T00:00:00Z"
+qrcode = "2099-01-01T00:00:00Z"
+google-api-python-client = "2099-01-01T00:00:00Z"
+brotlicffi = "2099-01-01T00:00:00Z"
+mem0ai = "2099-01-01T00:00:00Z"
+vercel = "2099-01-01T00:00:00Z"
+aiosqlite = "2099-01-01T00:00:00Z"
+tzdata = "2099-01-01T00:00:00Z"
+python-dotenv = "2099-01-01T00:00:00Z"
+daytona = "2099-01-01T00:00:00Z"
+uvicorn = "2099-01-01T00:00:00Z"
+requests = "2099-01-01T00:00:00Z"
+httplib2 = "2099-01-01T00:00:00Z"
+httpx = "2099-01-01T00:00:00Z"
+pyasn1 = "2099-01-01T00:00:00Z"
+snowballstemmer = "2099-01-01T00:00:00Z"
+concurrent-log-handler = "2099-01-01T00:00:00Z"
+cryptography = "2099-01-01T00:00:00Z"
+oauthlib = "2099-01-01T00:00:00Z"
+pydantic = "2099-01-01T00:00:00Z"
+agent-client-protocol = "2099-01-01T00:00:00Z"
+fire = "2099-01-01T00:00:00Z"
+httpx2 = "2099-01-01T00:00:00Z"
+google-auth-oauthlib = "2099-01-01T00:00:00Z"
+python-multipart = "2099-01-01T00:00:00Z"
+ty = "2099-01-01T00:00:00Z"
+openai = "2099-01-01T00:00:00Z"
+mautrix = "2099-01-01T00:00:00Z"
+google-auth-httplib2 = "2099-01-01T00:00:00Z"
+python-telegram-bot = "2099-01-01T00:00:00Z"
+psutil = "2099-01-01T00:00:00Z"
+jinja2 = "2099-01-01T00:00:00Z"
+hindsight-client = "2099-01-01T00:00:00Z"
+sounddevice = "2099-01-01T00:00:00Z"
+alibabacloud-dingtalk = "2099-01-01T00:00:00Z"
+dingtalk-stream = "2099-01-01T00:00:00Z"
 
 [manifest]
 overrides = [
@@ -128,12 +129,12 @@ name = "ai-edge-litert"
 version = "2.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-strenum" },
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "protobuf" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
+    { name = "backports-strenum", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "flatbuffers", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "protobuf", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "tqdm", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/3d/41a85023e1c6cc76d895f3ba6ac7c22b0785db7e08d0827ebeb8a403eefc/ai_edge_litert-2.1.6-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:edf598814004e594b40c888f52cae59e950dbeffd821e83ba45d28db0a0aa3f5", size = 10031164, upload-time = "2026-07-01T21:42:50.986Z" },
@@ -859,7 +860,7 @@ name = "concurrent-log-handler"
 version = "0.9.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "portalocker" },
+    { name = "portalocker", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9c/2c/ba185acc438cff6b58cd8f8dec27e7f4fcabf6968a1facbb6d0cacbde7fe/concurrent_log_handler-0.9.29.tar.gz", hash = "sha256:bc37a76d3f384cbf4a98f693ebd770543edc0f4cd5c6ab6bc70e9e1d7d582265", size = 42114, upload-time = "2026-02-22T18:18:25.758Z" }
 wheels = [
@@ -1740,8 +1741,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -2381,7 +2382,7 @@ requires-dist = [
     { name = "pvporcupine", marker = "extra == 'wake'", specifier = "==4.0.3" },
     { name = "pyasn1", marker = "extra == 'google'", specifier = "==0.6.4" },
     { name = "pydantic", specifier = "==2.13.4" },
-    { name = "pyjwt", extras = ["crypto"], specifier = "==2.13.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.15.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = "==1.3.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
@@ -2417,7 +2418,7 @@ requires-dist = [
     { name = "tenacity", specifier = "==9.1.4" },
     { name = "ty", marker = "extra == 'dev'", specifier = "==0.0.21" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = "==2025.3" },
-    { name = "urllib3", specifier = ">=2.7.0,<3" },
+    { name = "urllib3", specifier = ">=2.8.0,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.31.0,<1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = "==0.41.0" },
     { name = "vercel", marker = "extra == 'vercel'", specifier = "==0.7.2" },
@@ -2923,11 +2924,11 @@ wheels = [
 
 [[package]]
 name = "oauthlib"
-version = "3.3.1"
+version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
 ]
 
 [[package]]
@@ -3614,11 +3615,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.13.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/a5/5197bfd06417837ac079921c66fa6393f1dea3557272a263cebfef69e432/pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4", size = 120513, upload-time = "2026-09-23T16:56:00.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/55/40e45bf052ee8ee12a4dfd785519660f8effa7b065442b91646ec6828619/pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8", size = 33680, upload-time = "2026-09-23T16:55:59.241Z" },
 ]
 
 [package.optional-dependencies]
@@ -4136,7 +4137,7 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "python_full_version < '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -4193,7 +4194,7 @@ resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
 ]
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz", hash = "sha256:52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307", size = 30781235, upload-time = "2026-08-21T23:28:50.599Z" }
 wheels = [
@@ -4499,7 +4500,7 @@ name = "tflite-runtime"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/a6/02d68cb62cd221589a0ff055073251d883936237c9c990e34a1d7cecd06f/tflite_runtime-2.14.0-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:195ab752e7e57329a68e54dd3dd5439fad888b9bff1be0f0dc042a3237a90e4d", size = 2414486, upload-time = "2023-10-03T21:15:44.331Z" },
@@ -4709,11 +4710,11 @@ wheels = [
 
 [[package]]
 name = "urllib3"
-version = "2.7.0"
+version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/05/b17359e1cefb4f909b5e40b1b90a496d987258916dbbf88e842c729f510e/urllib3-2.8.0.tar.gz", hash = "sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63", size = 458972, upload-time = "2026-09-15T19:29:36.253Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+    { url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl", hash = "sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", size = 135717, upload-time = "2026-09-15T19:29:34.577Z" },
 ]
 
 [[package]]
@@ -4843,11 +4844,11 @@ name = "vercel-workers"
 version = "0.0.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "vercel" },
+    { name = "anyio", marker = "python_full_version >= '3.12'" },
+    { name = "httpx", marker = "python_full_version >= '3.12'" },
+    { name = "pydantic", marker = "python_full_version >= '3.12'" },
+    { name = "python-dotenv", marker = "python_full_version >= '3.12'" },
+    { name = "vercel", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/df/04d37021ad7ca53b7599c313e411d91623c7a005c741f491d1eefb7a9f0c/vercel_workers-0.0.25.tar.gz", hash = "sha256:212ded01400b524be51d251df49f801caf115ad7d48cca7eb168cbeceda3def3", size = 64149, upload-time = "2026-06-20T19:26:27.177Z" }
 wheels = [
