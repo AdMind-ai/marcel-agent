@@ -90,7 +90,7 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
         r"Maximum API requests per worker run \(blank = no limit\):",
         r"Maximum worker duration in seconds \(blank = no limit\):",
         r"FAL\.ai[^\r\n]* API key:",
-        r"[^\r\n]*\[(?:Y/n|y/N)\] ",
+        r"[^\r\n]*\[(?:Y/n|y/N)\]:?\s?",
         pexpect.EOF,
     ]
     checklist = ""
@@ -194,6 +194,9 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
                 else:
                     answer = "n"
             child.sendline(answer)
+            # prompt_toolkit redraws the submitted prompt before its newline.
+            # Drain that line so it cannot be mistaken for the next question.
+            child.expect([r"\r?\n", pexpect.EOF], timeout=15)
         raise AssertionError("Too many wizard prompts")
     except Exception as exc:
         # Retain only the sanitized tail for diagnosing a UI failure.
@@ -243,7 +246,11 @@ def main() -> None:
         assets.mkdir()
         env = {name: value for name, value in os.environ.items()
                if not any(part in name.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "TEST_KEY", "GITHUB", "ACTIONS", "RUNNER"))}
-        env.update(HOME=str(home), MARCEL_HOME=str(home / ".marcel"), TERM="dumb",
+        # TERM=dumb can enter curses after masked input yet cannot draw the
+        # model picker. An absent terminfo entry consistently selects the
+        # product's native numbered fallback, without monkeypatching its UI.
+        env.update(HOME=str(home), MARCEL_HOME=str(home / ".marcel"),
+                   TERM="marcel-qualification-numbered",
                    PATH=f"{home}/.local/bin:" + os.environ["PATH"], PYTHONUNBUFFERED="1")
         env.pop("MARCEL_NONINTERACTIVE", None)
         env.pop("UV_PROJECT_ENVIRONMENT", None)
@@ -281,6 +288,16 @@ def main() -> None:
             assert result.returncode == 0 and "ROUTER_PILOT_OK" in result.stdout, "Installed main runtime did not produce the live test response"
             evidence["main_live_response"] = "passed"
             print("Installed main real Router response passed.", flush=True)
+            for backup in BACKUPS:
+                result = subprocess.run(
+                    [str(python), str(install / "marcel"), "chat", "-q",
+                     "Reply with exactly FALLBACK_MODEL_PILOT_OK. Do not use tools.",
+                     "-t", "none", "-m", backup],
+                    env=env, cwd=install, capture_output=True, text=True, timeout=180,
+                )
+                assert result.returncode == 0 and "FALLBACK_MODEL_PILOT_OK" in result.stdout, \
+                    "A selected fallback did not execute through the real Router"
+            evidence["fallback_models_live_responses"] = "passed"
             evidence["worker_ui"] = drive(
                 [str(python), "-m", "marcel_cli.main", "setup", "marcel"],
                 env, workers=True, key=key, image_key=image_key,
