@@ -2,7 +2,7 @@ name: Public Ubuntu Router pilot
 
 on:
   push:
-    branches: ['qualification/router-rc4']
+    branches: ['qualification/router-rc5']
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ jobs:
   pilot:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    environment: router-qualification-rc4
+    environment: router-qualification-rc5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -29,12 +29,12 @@ jobs:
           MARCEL_IMAGE_TEST_KEY: ${{ secrets.MARCEL_IMAGE_TEST_KEY }}
         run: |
           python3 scripts/qualification/router-release-pilot.py \
-            --tag v0.21.0-rc.4 \
+            --tag v0.21.0-rc.5 \
             --evidence "$RUNNER_TEMP/router-pilot-evidence.json"
       - name: Retain only allowlisted evidence, never HOME or runtime logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: public-router-rc4-evidence
+          name: public-router-rc5-evidence
           path: ${{ runner.temp }}/router-pilot-evidence.json
           retention-days: 7

@@ -4534,11 +4534,11 @@ function Invoke-SetupWizard {
 
     Push-Location $InstallDir
 
-    # Run marcel setup using the venv Python directly (no activation needed)
+    # Use the canonical Marcel entrypoint, matching the installed command.
     if (-not $NoVenv) {
-        & ".\venv\Scripts\python.exe" -m marcel_cli.main setup
+        & ".\venv\Scripts\python.exe" ".\marcel" setup
     } else {
-        python -m marcel_cli.main setup
+        python ".\marcel" setup
     }
 
     Pop-Location

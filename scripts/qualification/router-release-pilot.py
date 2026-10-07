@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -28,7 +29,6 @@ ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07)")
 PRIMARY = "openai/gpt-4.1-nano"
 BACKUPS = ["openai/gpt-4o-mini", "openai/gpt-4.1-mini"]
 ROUTER = "https://marcel-agent.com/api/v1"
-EXPECTED_SHA = "3cb4314467db24f94e216e8bf417c97037afa994"
 
 
 def request_json(url: str, key: str | None = None) -> dict:
@@ -80,16 +80,16 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
                           timeout=600, echo=False, dimensions=(50, 240))
     # Never attach a logfile: credentials are typed only into the masked UI.
     patterns = [
-        r"Choice \[default \d+\]: ",
-        r"Toggle # \(or Enter to confirm\): ",
-        r"Agent name(?: \[[^\r\n]*\])?: ",
-        r"Marcel Router base URL(?: \[[^\r\n]*\])?: ",
-        r"(?:New )?Marcel Routing API key: ",
-        r"Fallback order by number \(Enter keeps this order\)(?: \[[^\r\n]*\])?: ",
-        r"Sub-agent name: ",
-        r"Maximum API requests per worker run \(blank = no limit\): ",
-        r"Maximum worker duration in seconds \(blank = no limit\): ",
-        r"FAL\.ai[^\r\n]* API key: ",
+        r"Choice \[default \d+\]:",
+        r"Toggle # \(or Enter to confirm\):",
+        r"Agent name(?: \[[^\r\n]*\])?:",
+        r"Marcel Router base URL(?: \[[^\r\n]*\])?:",
+        r"(?:New )?Marcel Routing API key:",
+        r"Fallback order by number \(Enter keeps this order\)(?: \[[^\r\n]*\])?:",
+        r"Sub-agent name:",
+        r"Maximum API requests per worker run \(blank = no limit\):",
+        r"Maximum worker duration in seconds \(blank = no limit\):",
+        r"FAL\.ai[^\r\n]* API key:",
         r"[^\r\n]*\[(?:Y/n|y/N)\] ",
         pexpect.EOF,
     ]
@@ -112,11 +112,16 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
                 assert child.exitstatus == 0, f"Command exited with status {child.exitstatus}"
                 assert seen_main, "Normal wizard did not reach the main-agent summary"
                 return {"main_summary_seen": True, "decisions": decisions, "selected_order": selected_order}
+            child.timeout = 90
             answer = ""
             if event == 0:
                 checklist = ""
                 items = menu_items(screen)
                 assert items, "Numbered UI did not expose menu items"
+                title = next((line.strip() for line in screen.splitlines()
+                              if line.strip() and "Select by number" not in line
+                              and not re.match(r"^\s*\([●○]\)", line)), "radio")
+                print("Wizard menu:", title[-180:], flush=True)
                 if "Orchestrator model" in screen or "Sub-agent model for" in screen:
                     answer = choose_matching(items, f"[{PRIMARY}]")
                 elif "Connection" in screen and any("Marcel Router" in label for _, label, _ in items):
@@ -138,7 +143,7 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
                     answer = choose_matching(items, "No")
                 elif "Retry Marcel Router connection?" in screen:
                     raise AssertionError("Real Router discovery failed in normal setup")
-                elif "voice" in screen.lower() and any("Edge" in label for _, label, _ in items):
+                elif any("Edge TTS" in label for _, label, _ in items):
                     answer = choose_matching(items, "Edge")
                 decisions.append("radio:" + (answer or "default"))
             elif event == 1:
@@ -192,9 +197,14 @@ def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: 
         raise AssertionError("Too many wizard prompts")
     except Exception as exc:
         # Retain only the sanitized tail for diagnosing a UI failure.
-        print("Wizard failure:", type(exc).__name__, str(exc).replace(key, "[redacted]"))
-        print("Sanitized last screen:", tail)
-        raise
+        screen = ANSI.sub("", child.before or "").replace("\r", "")
+        screen = "\n".join(line.rstrip() for line in screen.splitlines() if line.strip())
+        screen = screen[-2400:].replace(key, "[redacted]")
+        if image_key:
+            screen = screen.replace(image_key, "[redacted]")
+        print("Wizard failure:", type(exc).__name__, flush=True)
+        print("Sanitized last screen:", screen or tail, flush=True)
+        raise RuntimeError("Terminal driver failed: " + type(exc).__name__) from None
     finally:
         if child.isalive():
             child.terminate(force=True)
@@ -210,12 +220,19 @@ def installed_config(python: Path, install: Path, env: dict) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tag", default="v0.21.0-rc.4")
+    parser.add_argument("--tag", default="v0.21.0-rc.5")
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
     key = os.environ["MARCEL_ROUTER_TEST_KEY"]
     image_key = os.environ.get("MARCEL_IMAGE_TEST_KEY", "")
-    evidence = {"tag": args.tag, "candidate_sha": EXPECTED_SHA,
+    tag_object = request_json(
+        f"https://api.github.com/repos/AdMind-ai/marcel-agent/git/ref/tags/{args.tag}")["object"]
+    if tag_object["type"] == "tag":
+        tag_object = request_json(
+            f"https://api.github.com/repos/AdMind-ai/marcel-agent/git/tags/{tag_object['sha']}")["object"]
+    assert tag_object["type"] == "commit"
+    expected_sha = tag_object["sha"]
+    evidence = {"tag": args.tag, "candidate_sha": expected_sha,
                 "simulated": False, "image_generation": "not exercised"}
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="marcel-public-pilot-") as disposable:
@@ -240,12 +257,13 @@ def main() -> None:
             ids = {entry["id"] for entry in models}
             assert {PRIMARY, *BACKUPS} <= ids, "Required inexpensive test models absent from account catalog"
             evidence["account_model_count"] = len(models)
+            print("Public assets verified; authenticated account catalog:", len(models), flush=True)
             evidence["main_ui"] = drive(["bash", str(installer), "--branch", args.tag],
                                         env, workers=False, key=key, image_key=image_key)
             install = home / ".marcel" / "marcel-agent"
             python = install / "venv" / "bin" / "python"
             sha = subprocess.check_output(["git", "-C", str(install), "rev-parse", "HEAD"], env=env, text=True).strip()
-            assert sha == EXPECTED_SHA
+            assert sha == expected_sha
             evidence["installed_sha"] = sha
             config = installed_config(python, install, env)
             assert not config["delegation"]["workers"]
@@ -254,6 +272,7 @@ def main() -> None:
             assert [item["model"] for item in config["fallback_providers"]] == main_order
             assert key not in (home / ".marcel" / "config.yaml").read_text()
             evidence["main_saved_and_reloaded"] = "passed"
+            print("Normal install and zero-worker configuration reload passed.", flush=True)
             result = subprocess.run(
                 [str(python), "-m", "marcel_cli.main", "chat", "-q",
                  "Reply with exactly ROUTER_PILOT_OK. Do not use any tools.", "-t", "none"],
@@ -261,6 +280,7 @@ def main() -> None:
             )
             assert result.returncode == 0 and "ROUTER_PILOT_OK" in result.stdout, "Installed main runtime did not produce the live test response"
             evidence["main_live_response"] = "passed"
+            print("Installed main real Router response passed.", flush=True)
             evidence["worker_ui"] = drive(
                 [str(python), "-m", "marcel_cli.main", "setup", "marcel"],
                 env, workers=True, key=key, image_key=image_key,
@@ -270,13 +290,44 @@ def main() -> None:
             assert worker["model"] == PRIMARY and worker["provider"] == "marcel"
             assert worker["image_service"] == "global" and "image_gen" in worker["toolsets"]
             assert worker["permissions"] == "selected"
-            assert worker["fallback_models"] == evidence["worker_ui"]["selected_order"]
+            assert worker["fallbacks"] == evidence["worker_ui"]["selected_order"]
             assert worker["budget"]["max_requests"] == 3
             assert key not in (home / ".marcel" / "config.yaml").read_text()
             assert main_order == config["marcel"]["orchestrator"]["fallback_models"]
             evidence["worker_saved_and_reloaded"] = "passed"
+            result = subprocess.run(
+                [str(python), str(install / "marcel"), "chat", "-q",
+                 "Use delegate_task with worker imagepilot. Its goal is to reply exactly "
+                 "WORKER_ROUTER_PILOT_OK without creating an image or using tools. "
+                 "Wait for that worker and relay its response.", "-t", "delegation"],
+                env=env, cwd=install, capture_output=True, text=True, timeout=240,
+            )
+            assert result.returncode == 0, "Installed main with worker exited unsuccessfully"
+            with sqlite3.connect(home / ".marcel" / "state.db") as db:
+                messages = db.execute("SELECT role, content, tool_calls FROM messages").fetchall()
+            delegated = False
+            worker_answer = False
+            for role, content, calls in messages:
+                for call in json.loads(calls or "[]"):
+                    function = call.get("function", {})
+                    if function.get("name") != "delegate_task":
+                        continue
+                    arguments = json.loads(function.get("arguments") or "{}")
+                    delegated |= arguments.get("worker") == "imagepilot"
+                if role == "tool" and content:
+                    try:
+                        payload = json.loads(content)
+                    except (TypeError, ValueError):
+                        continue
+                    worker_answer |= any(
+                        not item.get("error") and "WORKER_ROUTER_PILOT_OK" in str(item.get("summary", ""))
+                        for item in payload.get("results", []) if isinstance(item, dict)
+                    ) if isinstance(payload, dict) else False
+            assert delegated and worker_answer, "Real registered image worker was not executed successfully"
+            evidence["main_with_worker_live_delegation"] = "passed"
+            print("Installed main delegated to the registered image worker over the real Router.", flush=True)
             evidence["worker"] = {field: worker[field] for field in (
-                "model", "provider", "activity", "fallback_models", "toolsets",
+                "model", "provider", "activity", "fallbacks", "toolsets",
                 "permissions", "budget", "image_service", "max_concurrency",
             )}
             evidence["fallbacks"] = {"selected_and_reloaded": main_order,

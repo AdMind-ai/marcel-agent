@@ -665,7 +665,8 @@ def _run_setup_section(config: dict, section: str) -> None:
     print_success(f"{label} configuration complete!")
 
 
-def _run_full_setup(config: dict, marcel_home, *, is_existing: bool, migration_ran: bool) -> None:
+def _run_full_setup(config: dict, marcel_home, *, is_existing: bool, migration_ran: bool,
+                    marcel_only: bool = False) -> None:
     """Full Setup — run all sections, honoring post-migration skips."""
     print_header("Configuration Location")
     _info(f"Config file:  {get_config_path()}", f"Secrets file: {get_env_path()}",
@@ -679,6 +680,12 @@ def _run_full_setup(config: dict, marcel_home, *, is_existing: bool, migration_r
     # Agent Settings are not prompted: first installs get defaults, existing keep theirs.
     if not is_existing:
         _apply_default_agent_settings(config)
+
+    if marcel_only:
+        # Marcel owns provider, tools, media and worker onboarding in one flow.
+        # A second legacy provider picker can replace the Router just saved.
+        _run_setup_steps([("Marcel Agent", lambda: setup_marcel(config))])
+        return
 
     def _skip(key: str, label: str) -> bool:
         return migration_ran and _skip_configured_section(config, key, label)
@@ -738,7 +745,11 @@ def _run_setup_wizard_impl(args):
     if getattr(args, 'non_interactive', False) or not is_interactive_stdin():
         print_noninteractive_setup_guidance("Running in a non-interactive environment (no TTY detected).")
         return
-    is_marcel = os.path.basename(sys.argv[0]).lower().startswith("marcel")
+    entrypoint = Path(sys.argv[0])
+    is_marcel = (
+        entrypoint.name.lower().startswith("marcel")
+        or entrypoint.parent.name == "marcel_cli"
+    )
     if getattr(args, "portal", False) and is_marcel:
         print_error("This option belongs to the legacy setup and is not available in Marcel.")
         return
@@ -804,7 +815,8 @@ def _run_setup_wizard_impl(args):
             from marcel_cli import setup_quick
             _run_setup_steps([(label, lambda: getattr(setup_quick, runner)(config, marcel_home, is_existing))])
             return
-    _run_full_setup(config, marcel_home, is_existing=is_existing, migration_ran=migration_ran)
+    _run_full_setup(config, marcel_home, is_existing=is_existing, migration_ran=migration_ran,
+                    marcel_only=is_marcel)
 
     # Save and show summary
     save_config(config)
