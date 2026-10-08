@@ -232,6 +232,18 @@ def installed_config(python: Path, install: Path, env: dict) -> dict:
     )
     return json.loads(result.stdout)
 
+def successful_worker_result(payload: dict) -> bool:
+    """Require a runtime result with real model consumption, never echoed text."""
+    return isinstance(payload, dict) and not payload.get("error") and any(
+        isinstance(item, dict)
+        and item.get("status") in {"completed", "success"}
+        and not item.get("error")
+        and item.get("api_calls", 0) > 0
+        and item.get("model") == PRIMARY
+        and "WORKER_ROUTER_PILOT_OK" in str(item.get("summary", ""))
+        for item in payload.get("results", [])
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -337,12 +349,17 @@ def main() -> None:
             )
             assert result.returncode == 0, "Installed main with worker exited unsuccessfully"
             with sqlite3.connect(home / ".marcel" / "state.db") as db:
-                messages = db.execute("SELECT role, content, tool_calls FROM messages").fetchall()
+                messages = db.execute(
+                    "SELECT session_id, role, content, tool_calls, tool_call_id FROM messages ORDER BY rowid"
+                ).fetchall()
             delegated = False
             worker_answer = False
             delegate_calls = 0
             tool_results = 0
             result_errors = 0
+            registered_calls: set[tuple[str, str]] = set()
+            dispatched: dict[str, str] = {}
+            async_completed = 0
             failure_signals: set[str] = set()
             signal_patterns = {
                 "credentials": r"api.?key|credential|unauthorized|authentication",
@@ -352,7 +369,7 @@ def main() -> None:
                 "approval": r"approval|permission|denied",
                 "model": r"model|not.?found",
             }
-            for role, content, calls in messages:
+            for session_id, role, content, calls, tool_call_id in messages:
                 for call in json.loads(calls or "[]"):
                     function = call.get("function", {})
                     if function.get("name") != "delegate_task":
@@ -360,16 +377,23 @@ def main() -> None:
                     delegate_calls += 1
                     raw_arguments = function.get("arguments") or "{}"
                     arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    delegated |= arguments.get("worker") == "imagepilot" or any(
+                    named_worker = arguments.get("worker") == "imagepilot" or any(
                         task.get("worker") == "imagepilot"
                         for task in arguments.get("tasks", []) if isinstance(task, dict)
                     )
+                    delegated |= named_worker
+                    if named_worker and call.get("id"):
+                        registered_calls.add((session_id, call["id"]))
                 if role == "tool" and content:
                     tool_results += 1
                     try:
                         payload = json.loads(content)
                     except (TypeError, ValueError):
                         continue
+                    if (session_id, tool_call_id) not in registered_calls:
+                        continue
+                    if isinstance(payload, dict) and payload.get("status") == "dispatched" and payload.get("delegation_id"):
+                        dispatched[payload["delegation_id"]] = session_id
                     items = payload.get("results", []) if isinstance(payload, dict) else []
                     for item in [payload, *items]:
                         if not isinstance(item, dict) or not item.get("error"):
@@ -378,10 +402,19 @@ def main() -> None:
                         for name, pattern in signal_patterns.items():
                             if re.search(pattern, str(item["error"]), re.I):
                                 failure_signals.add(name)
-                    worker_answer |= any(
-                        not item.get("error") and "WORKER_ROUTER_PILOT_OK" in str(item.get("summary", ""))
-                        for item in items if isinstance(item, dict)
-                    )
+                    worker_answer |= successful_worker_result(payload)
+            # Background delegation returns a dispatch handle as the tool
+            # result; its actual completion is persisted in the runtime ledger.
+            # Bind that completion to the named call and originating session.
+            with sqlite3.connect(home / ".marcel" / "state.db") as db:
+                for delegation_id, parent_session in dispatched.items():
+                    row = db.execute(
+                        "SELECT state, parent_session_id, result_json FROM async_delegations WHERE delegation_id = ?",
+                        (delegation_id,),
+                    ).fetchone()
+                    if row and row[0] == "completed" and row[1] == parent_session:
+                        async_completed += 1
+                        worker_answer |= successful_worker_result(json.loads(row[2] or "{}"))
             # Metadata and fixed diagnostic categories only; no transcripts or
             # arbitrary provider error text may enter retained evidence.
             evidence["delegation_diagnostics"] = {
@@ -390,6 +423,8 @@ def main() -> None:
                 "delegate_call_count": delegate_calls,
                 "tool_result_count": tool_results,
                 "result_error_count": result_errors,
+                "async_dispatch_count": len(dispatched),
+                "async_completed_count": async_completed,
                 "failure_signals": sorted(failure_signals),
                 "message_count": len(messages),
                 "main_output_has_worker_marker": "WORKER_ROUTER_PILOT_OK" in result.stdout,
