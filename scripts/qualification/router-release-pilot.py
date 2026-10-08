@@ -78,7 +78,8 @@ def choose_matching(items: list, text: str) -> str:
 def drive(command: list[str], env: dict, *, workers: bool, key: str, image_key: str,
           keep_main_order: list[str] | None = None) -> dict:
     child = pexpect.spawn(command[0], command[1:], env=env, encoding="utf-8",
-                          timeout=600, echo=False, dimensions=(50, 240))
+                          timeout=600, echo=False, dimensions=(50, 240),
+                          maxread=65536, searchwindowsize=65536)
     # Never attach a logfile: credentials are typed only into the masked UI.
     patterns = [
         r"Choice \[default \d+\]:",
@@ -262,7 +263,8 @@ def main() -> None:
         # product's native numbered fallback, without monkeypatching its UI.
         env.update(HOME=str(home), MARCEL_HOME=str(home / ".marcel"),
                    TERM="marcel-qualification-numbered",
-                   PATH=f"{home}/.local/bin:" + os.environ["PATH"], PYTHONUNBUFFERED="1")
+                   PATH=f"{home}/.local/bin:" + os.environ["PATH"],
+                   PYTHONUNBUFFERED="1", UV_NO_PROGRESS="1")
         env.pop("MARCEL_NONINTERACTIVE", None)
         env.pop("UV_PROJECT_ENVIRONMENT", None)
         if image_key:
@@ -276,6 +278,7 @@ def main() -> None:
             assert {PRIMARY, *BACKUPS} <= ids, "Required inexpensive test models absent from account catalog"
             evidence["account_model_count"] = len(models)
             print("Public assets verified; authenticated account catalog:", len(models), flush=True)
+            print("Starting the normal public installer; dependency progress animation disabled.", flush=True)
             evidence["main_ui"] = drive(["bash", str(installer), "--branch", args.tag],
                                         env, workers=False, key=key, image_key=image_key)
             assert len(evidence["main_ui"]["selected_order"]) == 2
