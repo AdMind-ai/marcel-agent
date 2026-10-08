@@ -340,11 +340,24 @@ def main() -> None:
                 messages = db.execute("SELECT role, content, tool_calls FROM messages").fetchall()
             delegated = False
             worker_answer = False
+            delegate_calls = 0
+            tool_results = 0
+            result_errors = 0
+            failure_signals: set[str] = set()
+            signal_patterns = {
+                "credentials": r"api.?key|credential|unauthorized|authentication",
+                "provider": r"provider|base.?url",
+                "budget": r"budget|request.?limit|time.?limit",
+                "timeout": r"timeout|timed out",
+                "approval": r"approval|permission|denied",
+                "model": r"model|not.?found",
+            }
             for role, content, calls in messages:
                 for call in json.loads(calls or "[]"):
                     function = call.get("function", {})
                     if function.get("name") != "delegate_task":
                         continue
+                    delegate_calls += 1
                     raw_arguments = function.get("arguments") or "{}"
                     arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
                     delegated |= arguments.get("worker") == "imagepilot" or any(
@@ -352,14 +365,35 @@ def main() -> None:
                         for task in arguments.get("tasks", []) if isinstance(task, dict)
                     )
                 if role == "tool" and content:
+                    tool_results += 1
                     try:
                         payload = json.loads(content)
                     except (TypeError, ValueError):
                         continue
+                    items = payload.get("results", []) if isinstance(payload, dict) else []
+                    for item in [payload, *items]:
+                        if not isinstance(item, dict) or not item.get("error"):
+                            continue
+                        result_errors += 1
+                        for name, pattern in signal_patterns.items():
+                            if re.search(pattern, str(item["error"]), re.I):
+                                failure_signals.add(name)
                     worker_answer |= any(
                         not item.get("error") and "WORKER_ROUTER_PILOT_OK" in str(item.get("summary", ""))
-                        for item in payload.get("results", []) if isinstance(item, dict)
-                    ) if isinstance(payload, dict) else False
+                        for item in items if isinstance(item, dict)
+                    )
+            # Metadata and fixed diagnostic categories only; no transcripts or
+            # arbitrary provider error text may enter retained evidence.
+            evidence["delegation_diagnostics"] = {
+                "registered_worker_requested": delegated,
+                "successful_worker_result": worker_answer,
+                "delegate_call_count": delegate_calls,
+                "tool_result_count": tool_results,
+                "result_error_count": result_errors,
+                "failure_signals": sorted(failure_signals),
+                "message_count": len(messages),
+                "main_output_has_worker_marker": "WORKER_ROUTER_PILOT_OK" in result.stdout,
+            }
             assert delegated and worker_answer, "Real registered image worker was not executed successfully"
             evidence["main_with_worker_live_delegation"] = "passed"
             print("Installed main delegated to the registered image worker over the real Router.", flush=True)
