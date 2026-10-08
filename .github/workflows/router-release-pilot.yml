@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   pilot:
+    if: github.ref == 'refs/heads/qualification/router-rc5'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     environment: router-qualification-rc5
@@ -23,6 +24,8 @@ jobs:
           persist-credentials: false
       - name: Prepare terminal driver
         run: python3 -m pip install pexpect pyyaml
+      - name: Check evidence collector with simulated records, not live qualification
+        run: python3 -m unittest discover -s tests/qualification -p 'test_router_pilot_evidence.py' -v
       - name: Run anonymous public install and real Router wizard
         env:
           MARCEL_ROUTER_TEST_KEY: ${{ secrets.MARCEL_ROUTER_TEST_KEY }}

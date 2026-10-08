@@ -23,6 +23,7 @@ import urllib.request
 
 import pexpect
 import yaml
+from router_pilot_evidence import collect_delegation_evidence
 
 
 ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07)")
@@ -232,19 +233,6 @@ def installed_config(python: Path, install: Path, env: dict) -> dict:
     )
     return json.loads(result.stdout)
 
-def successful_worker_result(payload: dict) -> bool:
-    """Require a runtime result with real model consumption, never echoed text."""
-    return isinstance(payload, dict) and not payload.get("error") and any(
-        isinstance(item, dict)
-        and item.get("status") in {"completed", "success"}
-        and not item.get("error")
-        and item.get("api_calls", 0) > 0
-        and item.get("model") == PRIMARY
-        and "WORKER_ROUTER_PILOT_OK" in str(item.get("summary", ""))
-        for item in payload.get("results", [])
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default="v0.21.0-rc.5")
@@ -337,99 +325,27 @@ def main() -> None:
             assert worker["permissions"] == "selected"
             assert worker["fallback_models"] == evidence["worker_ui"]["selected_order"]
             assert worker["budget"]["max_requests"] == 3
+            assert worker["budget"]["max_duration_seconds"] == 90
             assert key not in (home / ".marcel" / "config.yaml").read_text()
             assert main_order == config["marcel"]["orchestrator"]["fallback_models"]
             evidence["worker_saved_and_reloaded"] = "passed"
             result = subprocess.run(
                 [str(python), str(install / "marcel"), "chat", "-q",
-                 "Use delegate_task with worker imagepilot. Its goal is to reply exactly "
-                 "WORKER_ROUTER_PILOT_OK without creating an image or using tools. "
-                 "Wait for that worker and relay its response.", "-t", "delegation"],
+                 'Call the delegate_task tool exactly once with this JSON object: '
+                 '{"worker":"imagepilot","tasks":[{"goal":"Reply with exactly '
+                 'WORKER_ROUTER_PILOT_OK. Do not create an image or use any tools."}]}. '
+                 'The worker argument MUST be at the top level, not inside tasks. '
+                 'Do not use an unnamed/default subagent. Wait for the actual '
+                 'worker result and relay it; never invent or echo its expected response.',
+                 "-t", "delegation"],
                 env=env, cwd=install, capture_output=True, text=True, timeout=240,
             )
             assert result.returncode == 0, "Installed main with worker exited unsuccessfully"
             with sqlite3.connect(home / ".marcel" / "state.db") as db:
-                messages = db.execute(
-                    "SELECT session_id, role, content, tool_calls, tool_call_id FROM messages ORDER BY rowid"
-                ).fetchall()
-            delegated = False
-            worker_answer = False
-            delegate_calls = 0
-            tool_results = 0
-            result_errors = 0
-            registered_calls: set[tuple[str, str]] = set()
-            dispatched: dict[str, str] = {}
-            async_completed = 0
-            failure_signals: set[str] = set()
-            signal_patterns = {
-                "credentials": r"api.?key|credential|unauthorized|authentication",
-                "provider": r"provider|base.?url",
-                "budget": r"budget|request.?limit|time.?limit",
-                "timeout": r"timeout|timed out",
-                "approval": r"approval|permission|denied",
-                "model": r"model|not.?found",
-            }
-            for session_id, role, content, calls, tool_call_id in messages:
-                for call in json.loads(calls or "[]"):
-                    function = call.get("function", {})
-                    if function.get("name") != "delegate_task":
-                        continue
-                    delegate_calls += 1
-                    raw_arguments = function.get("arguments") or "{}"
-                    arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    named_worker = arguments.get("worker") == "imagepilot" or any(
-                        task.get("worker") == "imagepilot"
-                        for task in arguments.get("tasks", []) if isinstance(task, dict)
-                    )
-                    delegated |= named_worker
-                    if named_worker and call.get("id"):
-                        registered_calls.add((session_id, call["id"]))
-                if role == "tool" and content:
-                    tool_results += 1
-                    try:
-                        payload = json.loads(content)
-                    except (TypeError, ValueError):
-                        continue
-                    if (session_id, tool_call_id) not in registered_calls:
-                        continue
-                    if isinstance(payload, dict) and payload.get("status") == "dispatched" and payload.get("delegation_id"):
-                        dispatched[payload["delegation_id"]] = session_id
-                    items = payload.get("results", []) if isinstance(payload, dict) else []
-                    for item in [payload, *items]:
-                        if not isinstance(item, dict) or not item.get("error"):
-                            continue
-                        result_errors += 1
-                        for name, pattern in signal_patterns.items():
-                            if re.search(pattern, str(item["error"]), re.I):
-                                failure_signals.add(name)
-                    worker_answer |= successful_worker_result(payload)
-            # Background delegation returns a dispatch handle as the tool
-            # result; its actual completion is persisted in the runtime ledger.
-            # Bind that completion to the named call and originating session.
-            with sqlite3.connect(home / ".marcel" / "state.db") as db:
-                for delegation_id, parent_session in dispatched.items():
-                    row = db.execute(
-                        "SELECT state, parent_session_id, result_json FROM async_delegations WHERE delegation_id = ?",
-                        (delegation_id,),
-                    ).fetchone()
-                    if row and row[0] == "completed" and row[1] == parent_session:
-                        async_completed += 1
-                        worker_answer |= successful_worker_result(json.loads(row[2] or "{}"))
-            # Metadata and fixed diagnostic categories only; no transcripts or
-            # arbitrary provider error text may enter retained evidence.
-            evidence["delegation_diagnostics"] = {
-                "registered_worker_requested": delegated,
-                "successful_worker_result": worker_answer,
-                "delegate_call_count": delegate_calls,
-                "tool_result_count": tool_results,
-                "result_error_count": result_errors,
-                "async_dispatch_count": len(dispatched),
-                "async_completed_count": async_completed,
-                "failure_signals": sorted(failure_signals),
-                "message_count": len(messages),
-                "main_output_has_worker_marker": "WORKER_ROUTER_PILOT_OK" in result.stdout,
-            }
-            assert delegated and worker_answer, "Real registered image worker was not executed successfully"
+                diagnostics = collect_delegation_evidence(db, PRIMARY)
+            evidence["delegation_diagnostics"] = diagnostics
+            assert diagnostics["registered_worker_requested"] and diagnostics["successful_worker_result"], \
+                "Real registered image worker was not executed successfully"
             evidence["main_with_worker_live_delegation"] = "passed"
             print("Installed main delegated to the registered image worker over the real Router.", flush=True)
             evidence["worker"] = {field: worker[field] for field in (
