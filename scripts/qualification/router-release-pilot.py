@@ -323,7 +323,7 @@ def main() -> None:
             assert worker["model"] == PRIMARY and worker["provider"] == "marcel"
             assert worker["image_service"] == "global" and "image_gen" in worker["toolsets"]
             assert worker["permissions"] == "selected"
-            assert worker["fallbacks"] == evidence["worker_ui"]["selected_order"]
+            assert worker["fallback_models"] == evidence["worker_ui"]["selected_order"]
             assert worker["budget"]["max_requests"] == 3
             assert key not in (home / ".marcel" / "config.yaml").read_text()
             assert main_order == config["marcel"]["orchestrator"]["fallback_models"]
@@ -364,7 +364,7 @@ def main() -> None:
             evidence["main_with_worker_live_delegation"] = "passed"
             print("Installed main delegated to the registered image worker over the real Router.", flush=True)
             evidence["worker"] = {field: worker[field] for field in (
-                "model", "provider", "activity", "fallbacks", "toolsets",
+                "model", "provider", "activity", "fallback_models", "toolsets",
                 "permissions", "budget", "image_service", "max_concurrency",
             )}
             evidence["fallbacks"] = {"selected_and_reloaded": main_order,
