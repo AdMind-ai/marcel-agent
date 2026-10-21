@@ -143,7 +143,7 @@ jobs:
       # cheapest path to coverage on every PR that touches docker code.
       # ---------------------------------------------------------------------
       - name: Install uv (for docker tests)
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # 10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # 10.3.0
         with:
           # Pinned: unpinned setup-uv fetches a 'latest' manifest from
           # raw.githubusercontent.com every job; transient fetch failures
