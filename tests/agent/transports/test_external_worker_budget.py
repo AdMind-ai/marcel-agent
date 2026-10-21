@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -80,7 +81,20 @@ def test_last_admitted_request_finishes_then_next_dispatch_is_refused(transport,
 
 
 @pytest.mark.parametrize("scenario", ["stall", "handshake_stall"])
-def test_duration_stops_real_process_even_when_peer_never_finishes(transport, tmp_path, scenario):
+def test_duration_stops_real_process_even_when_peer_never_finishes(transport, tmp_path, scenario, monkeypatch):
+    from agent.transports import worker_budget
+
+    cancel_flushed = threading.Event()
+    cancel_process = worker_budget.cancel_external_process
+
+    def observe_cancel(send_cancel, close):
+        def send_and_record():
+            send_cancel()
+            cancel_flushed.set()
+        return cancel_process(send_and_record, close)
+
+    if transport == "acp":
+        monkeypatch.setattr(worker_budget, "cancel_external_process", observe_cancel)
     worker = ExternalWorker(transport, {"max_duration_seconds": 0.25}, tmp_path, scenario)
     start = time.monotonic()
     try:
@@ -97,8 +111,15 @@ def test_duration_stops_real_process_even_when_peer_never_finishes(transport, tm
                 for client in worker.clients
             ]
         if scenario == "stall":
-            cancel = "session/cancel" if transport == "acp" else "turn/interrupt"
-            assert cancel in [m["method"] for m in worker.messages()]
+            methods = [m["method"] for m in worker.messages()]
+            if transport == "acp":
+                # The deadline can kill the peer before it logs a flushed
+                # notification. Sending is not backend acknowledgement:
+                # the separate qualification probe requires a cancelled reply.
+                if "session/prompt" in methods:
+                    assert cancel_flushed.is_set()
+            else:
+                assert "turn/interrupt" in methods
     finally:
         worker.close()
 
