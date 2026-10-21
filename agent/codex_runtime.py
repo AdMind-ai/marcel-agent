@@ -473,6 +473,8 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
     try:
         turn = agent._codex_session.run_turn(user_input=user_message)
     except Exception as exc:
+        from agent.worker_accounting import fail_on_worker_budget
+        fail_on_worker_budget(exc)
         logger.exception("codex app-server turn failed")
         _close_codex_session(agent)
         return _turn_result(

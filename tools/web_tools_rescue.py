@@ -58,7 +58,11 @@ def _rescue_search(provider_name: str, original_error: str, query: str, limit: i
         "web_search backend '%s' failed (%s); one-shot keyless rescue",
         provider_name, (original_error or "")[:200],
     )
-    rescued = search_with_failover(provider_name, query, limit)
+    from agent.worker_accounting import service_call
+    rescued = service_call(
+        lambda request: search_with_failover(provider_name, request["query"], request["limit"]),
+        {"query": query, "limit": limit}, source="web_search:rescue",
+    )
     if rescued.get("success"):
         rescued.setdefault("data", {}).update(
             rescued_from=provider_name,
@@ -106,7 +110,11 @@ def _rescue_extract(provider_name: str, urls: list, results: list) -> list:
         "web_extract backend '%s' failed all %d URL(s) (%s); one-shot keyless rescue",
         provider_name, len(rescue_urls), (original_error or "")[:200],
     )
-    rescued = extract_with_failover(provider_name, list(rescue_urls))
+    from agent.worker_accounting import service_call
+    rescued = service_call(
+        lambda urls: extract_with_failover(provider_name, urls),
+        list(rescue_urls), source="web_extract:rescue",
+    )
     if rescued and all(r.get("error", "") for r in rescued):
         return results  # rescue also failed everywhere: keep original errors
     for r in rescued:

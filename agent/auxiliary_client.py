@@ -2444,6 +2444,13 @@ def _relay_sync_completion(
     api_mode: str | None = None, create: Callable[[dict[str, Any]], Any] | None = None,
 ) -> Any:
     callback = create or (lambda request: client.chat.completions.create(**request))
+    from agent.worker_accounting import provider_call
+    if create is None:
+        raw_callback = callback
+        callback = lambda request: provider_call(
+            raw_callback, request, source="auxiliary_model", provider=provider or "",
+            api_mode=api_mode or "", base_url=getattr(client, "base_url", ""),
+        )
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     # Isolate only the provider callback so the owning thread can unwind its lease/DB
     # transaction on hard cancel without touching the shared client.
@@ -2463,6 +2470,12 @@ async def _relay_async_completion(
     api_mode: str | None = None, create: Callable[[dict[str, Any]], Any] | None = None,
 ) -> Any:
     callback = create or (lambda request: client.chat.completions.create(**request))
+    from agent.worker_accounting import provider_call_async
+    raw_callback = callback
+    callback = lambda request: provider_call_async(
+        raw_callback, request, source="auxiliary_model", provider=provider or "",
+        api_mode=api_mode or "", base_url=str(getattr(client, "base_url", "") or ""),
+    )
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
         return await callback(kwargs)
@@ -2477,13 +2490,19 @@ async def _relay_async_completion(
 def _relay_sync_stream(
     client: Any, kwargs: dict[str, Any], *, provider: str | None = None, api_mode: str | None = None
 ) -> Any:
+    from agent.worker_accounting import provider_stream
+    callback = lambda request: provider_stream(
+        lambda kw: client.chat.completions.create(**kw), request, source="auxiliary_stream",
+        provider=provider or "", api_mode=api_mode or "",
+        base_url=str(getattr(client, "base_url", "") or ""),
+    )
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
     if route is None:
-        return client.chat.completions.create(**kwargs)
+        return callback(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
     return relay_llm.stream_current(
-        kwargs, lambda request: client.chat.completions.create(**request), name=provider_name,
+        kwargs, callback, name=provider_name,
         model_name=str(kwargs.get("model") or fallback_model), finalizer=dict, metadata=metadata,
         completed_response_predicate=lambda value: hasattr(value, "choices"),
     )
@@ -6233,14 +6252,22 @@ def _create_with_progress_once(
     """
     _notify_aux_dispatch()
     _notify_aux_progress()  # Preserve the watchdog's historical dispatch tick.
+    from agent.worker_accounting import provider_call, provider_stream
+    route = _RELAY_AUX_CALL_CONTEXT.get() or {}
+    accounting_route = {
+        "source": f"auxiliary:{task or 'unknown'}",
+        "provider": route.get("provider", ""), "api_mode": route.get("api_mode", ""),
+        "base_url": str(getattr(client, "base_url", "") or ""),
+    }
+    callback = lambda request: client.chat.completions.create(**request)
     if (not _aux_progress_active() and not force_stream) or _client_streams_internally(client):
-        response = client.chat.completions.create(**kwargs)
+        response = provider_call(callback, kwargs, **accounting_route)
         if not _client_streams_internally(client):
             _notify_aux_provider_response()
         return response
     stream_kwargs, model, total_ceiling = _stream_request_plan(kwargs)
     try:
-        chunks = client.chat.completions.create(**stream_kwargs)
+        chunks = provider_stream(callback, stream_kwargs, **accounting_route)
     except Exception as exc:
         # Genuine provider failures aren't streaming's fault — surface unchanged so the
         # recovery chains see the same error as a plain call.
@@ -6252,7 +6279,7 @@ def _create_with_progress_once(
         logger.debug("Auxiliary %s: streamed request failed (%s); retrying non-streaming",
                      task or "call", exc)
         _notify_aux_dispatch()
-        response = client.chat.completions.create(**kwargs)
+        response = provider_call(callback, kwargs, **accounting_route)
         _notify_aux_provider_response()
         return response
     # Some shims (MoA quiet mode, defensive adapters) return a complete response despite
@@ -6901,6 +6928,8 @@ def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
             try:
                 result = perform(step)
             except Exception as exc:
+                from agent.worker_accounting import fail_on_worker_budget
+                fail_on_worker_budget(exc)
                 step = ladder.throw(exc)
             else:
                 step = ladder.send(result)
@@ -6916,6 +6945,8 @@ async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> 
             try:
                 result = await perform(step)
             except Exception as exc:
+                from agent.worker_accounting import fail_on_worker_budget
+                fail_on_worker_budget(exc)
                 step = ladder.throw(exc)
             else:
                 step = ladder.send(result)
@@ -7099,7 +7130,7 @@ def _call_llm_impl(
         if task == "moa_aggregator" and isinstance(client, CodexAuxiliaryClient):
             # Responses-shim clients consume the stream internally and return a completed
             # object Relay's managed stream would iterate; the MoA facade wraps it as one chunk.
-            return client.chat.completions.create(**kwargs)
+            return _relay_sync_completion(client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode)
         return _relay_sync_stream(client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode)
 
     def _primary(**validate_kw: Any) -> Any:
@@ -7150,6 +7181,8 @@ def _call_llm_impl(
                     _last_transient = retry_transient
             raise _last_transient
     except Exception as first_err:
+        from agent.worker_accounting import fail_on_worker_budget
+        fail_on_worker_budget(first_err)
         def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":
@@ -7304,6 +7337,8 @@ async def _async_call_llm_impl(
                         "once on the same provider before fallback: %s", task or "call", transient_err)
             return await _primary()
     except Exception as first_err:
+        from agent.worker_accounting import fail_on_worker_budget
+        fail_on_worker_budget(first_err)
         async def _perform(step: _LadderStep) -> Any:
             kind, args, kw = _ladder_step_call(step, req, retry_kwargs, candidate_kwargs)
             if kind == "call":

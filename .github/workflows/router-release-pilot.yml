@@ -1,0 +1,43 @@
+name: Public Ubuntu Router pilot
+
+on:
+  push:
+    branches: ['qualification/router-rc5']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-release-pilot
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    if: github.ref == 'refs/heads/qualification/router-rc5'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: router-qualification-rc5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Prepare terminal driver
+        run: python3 -m pip install pexpect pyyaml
+      - name: Check evidence collector with simulated records, not live qualification
+        run: python3 -m unittest discover -s tests/qualification -p 'test_router_pilot_evidence.py' -v
+      - name: Run anonymous public install and real Router wizard
+        env:
+          MARCEL_ROUTER_TEST_KEY: ${{ secrets.MARCEL_ROUTER_TEST_KEY }}
+          MARCEL_IMAGE_TEST_KEY: ${{ secrets.MARCEL_IMAGE_TEST_KEY }}
+        run: |
+          python3 scripts/qualification/router-release-pilot.py \
+            --tag v0.21.0-rc.5 \
+            --evidence "$RUNNER_TEMP/router-pilot-evidence.json"
+      - name: Retain only allowlisted evidence, never HOME or runtime logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-router-rc5-evidence
+          path: ${{ runner.temp }}/router-pilot-evidence.json
+          retention-days: 7

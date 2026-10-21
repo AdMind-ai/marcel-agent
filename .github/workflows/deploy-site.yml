@@ -25,8 +25,6 @@ on:
 permissions:
   contents: read
   actions: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -67,22 +65,17 @@ jobs:
           esac
           curl -fsS --retry 3 --retry-delay 10 -X POST "$VERCEL_DEPLOY_HOOK"
 
-  deploy-docs:
+  build-docs:
     if: github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      - name: Get GitHub App token
-        id: app-token
-        uses: ./.github/actions/get-app-token
         with:
-          client-id: ${{ vars.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -105,8 +98,10 @@ jobs:
 
       - name: Prepare skills index (unified multi-source catalog)
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Catalog reads need no GitHub App/private key or repository write access.
+          # Keep even this read-only token out of npm install/build steps.
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           SKILLS_INDEX_RUN_ID: ${{ github.event.inputs.skills_index_run_id || '' }}
           REBUILD_SKILLS_INDEX: ${{ github.event.inputs.rebuild_skills_index || 'false' }}
         run: |
@@ -270,6 +265,19 @@ jobs:
         with:
           path: _site
 
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # Only the static artifact crosses into the privileged publication job.
+      # Do not checkout source or run npm/glob tooling here.
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4

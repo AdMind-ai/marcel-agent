@@ -149,9 +149,17 @@ async def _dispatch_extract(provider, fetch_urls: List[str], format: Optional[st
     from tools.web_result_cache import extract_cache_put
     try:
         if inspect.iscoroutinefunction(provider.extract):
-            results = await provider.extract(fetch_urls, format=format)
+            from agent.worker_accounting import service_call_async
+            results = await service_call_async(
+                lambda urls: provider.extract(urls, format=format),
+                fetch_urls, source=f"web_extract:{provider.name}",
+            )
         else:  # sync extract() runs in a thread so network I/O never blocks the loop
-            results = await asyncio.to_thread(provider.extract, fetch_urls, format=format)
+            from agent.worker_accounting import service_call
+            results = await asyncio.to_thread(
+                service_call, lambda urls: provider.extract(urls, format=format),
+                fetch_urls, source=f"web_extract:{provider.name}",
+            )
     except Exception as exc:  # noqa: BLE001 — candidate for rescue
         if not _rescue_eligible(provider):
             raise

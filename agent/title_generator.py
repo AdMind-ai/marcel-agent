@@ -437,8 +437,9 @@ def maybe_auto_title(
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return
     apply_instant_title(session_db, session_id, user_message, title_callback)
+    from tools.thread_context import propagate_context_to_thread
     threading.Thread(
-        target=auto_title_session,
+        target=propagate_context_to_thread(auto_title_session),
         args=(session_db, session_id, user_message),
         kwargs=dict(failure_callback=failure_callback, main_runtime=main_runtime, title_callback=title_callback, runtime_validator=runtime_validator),
         daemon=True,

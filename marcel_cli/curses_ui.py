@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Callable, List, Optional, Sequence, Set, Tuple, Union
 
 from marcel_cli.colors import Colors, color
+from marcel_cli.terminal_menu import numbered_line_input, supports_curses_menu
 
 # Rich radiolist rows: (text, style). style is None | "yellow" | "dim". Plain ``str`` works too.
 RadioItem = Union[str, Sequence[Tuple[str, Optional[str]]]]
@@ -85,6 +86,12 @@ def _read_numbered_input(prompt_text: str) -> str | _NumberedNavigation:
     Escape / Ctrl+C / Left bindings on POSIX and native Windows."""
     if _MENU_NAVIGATION_HANDLER.get() is None:
         return input(prompt_text)
+    if sys.stdin.isatty() and not supports_curses_menu():
+        try:
+            value = numbered_line_input(prompt_text, allow_back=_NUMBERED_BACK_ENABLED.get())
+        except KeyboardInterrupt:
+            return _NumberedNavigation.CANCEL
+        return _NumberedNavigation.BACK if value is None else value
     from prompt_toolkit import PromptSession
     from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.key_binding import KeyBindings
@@ -104,7 +111,10 @@ def _read_numbered_input(prompt_text: str) -> str | _NumberedNavigation:
         @bindings.add(Keys.Left)
         def _back(event) -> None:
             event.app.exit(result=_NumberedNavigation.BACK)
-    return PromptSession().prompt(ANSI(prompt_text), key_bindings=bindings)
+    try:
+        return PromptSession().prompt(ANSI(prompt_text), key_bindings=bindings)
+    except KeyboardInterrupt:
+        return _NumberedNavigation.CANCEL
 
 
 def radio_item_plain(item: RadioItem) -> str:
@@ -433,7 +443,10 @@ _RESOLVING = frozenset({NAV_SELECT, NAV_TOGGLE, NAV_CANCEL, NAV_INTERRUPT, NAV_B
 
 
 def _init_colors(curses, extra_color_pairs: bool) -> None:
-    curses.curs_set(0)
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # hiding the cursor is cosmetic, not required for a readable menu
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
@@ -504,6 +517,8 @@ def _run_curses_menu(
     def _run_fallback():
         back_token = _NUMBERED_BACK_ENABLED.set(allow_back)
         try:
+            if navigation_handler is not None:
+                print("  Esc/Ctrl+C cancel" + ("; Left arrow back." if allow_back else "."))
             result = fallback()
         finally:
             _NUMBERED_BACK_ENABLED.reset(back_token)
@@ -513,6 +528,8 @@ def _run_curses_menu(
     try:
         import curses
     except ImportError:
+        return _run_fallback()
+    if not supports_curses_menu():
         return _run_fallback()
     try:
         result_holder = [_KEEP]
@@ -529,6 +546,8 @@ def _run_curses_menu(
                 cursor, cursor_pos = _reconcile_cursor(filtered, cursor)
                 items_start = draw_header(
                     stdscr, max_y, max_x, search=search, back_enabled=allow_back)
+                if max_x < 20 or items_start >= max_y - reserve_bottom:
+                    raise curses.error("Terminal too small to display menu choices")
                 visible_rows = max(1, max_y - items_start - reserve_bottom)
                 scroll_offset = _scroll_for_cursor(
                     scroll_offset, cursor_pos, visible_rows, len(filtered))

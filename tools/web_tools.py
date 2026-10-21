@@ -321,7 +321,11 @@ def _memoized_search(provider, query: str, limit: int) -> dict:
     def _paid_search() -> tuple[dict, bool]:
         fetch_limit = bucket_limit(limit)
         try:
-            resp = provider.search(query, fetch_limit)
+            from agent.worker_accounting import service_call
+            resp = service_call(
+                lambda request: provider.search(request["query"], request["limit"]),
+                {"query": query, "limit": fetch_limit}, source=f"web_search:{provider.name}",
+            )
         except Exception as exc:  # noqa: BLE001 — candidate for rescue
             if not _rescue_eligible(provider):
                 raise

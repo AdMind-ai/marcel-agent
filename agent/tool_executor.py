@@ -649,6 +649,16 @@ def _dispatch_authorized_once(
             callback()
 
     block_message, block_error_type = scope_block, "tool_scope_block"
+    from tools.delegate_worker_limits import WorkerBudgetExceeded, WorkerLimits
+    worker_limits = getattr(agent, "_worker_limits", None)
+    if isinstance(worker_limits, WorkerLimits):
+        try:
+            worker_limits.check()
+        except WorkerBudgetExceeded as exc:
+            block_message, block_error_type = str(exc), "worker_budget"
+    allowed_worker_tools = getattr(agent, "_worker_allowed_tools", None)
+    if isinstance(allowed_worker_tools, frozenset) and ref.name not in allowed_worker_tools:
+        block_message = "Tool is not permitted by this worker's selected permissions."
     if block_message is None:
         block_error_type = "plugin_block"
         resolve = lambda: _pre_tool_block(agent, ref)  # noqa: E731

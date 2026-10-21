@@ -126,7 +126,10 @@ def _generate_openai_tts(
         create_kwargs["extra_body"] = {"lang_code": oai_config["language"]}
     client = _origin()._import_openai_client()(api_key=api_key, base_url=base_url)
     try:
-        client.audio.speech.create(**create_kwargs).stream_to_file(output_path)
+        from agent.worker_accounting import service_call
+        service_call(
+            lambda request: client.audio.speech.create(**request), create_kwargs, source="tts:openai",
+        ).stream_to_file(output_path)
         return output_path
     finally:
         close = getattr(client, "close", None)
