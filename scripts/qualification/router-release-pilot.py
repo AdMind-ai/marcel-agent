@@ -51,7 +51,7 @@ def public_assets(tag: str, root: Path) -> Path:
                 shutil.copyfileobj(source, destination)
     manifest = [
         line.split("  ", 1)
-        for line in (root / "SHA256SUMS").read_text().splitlines()
+        for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     ]
     assert len(manifest) == 4 and {name for _, name in manifest} == expected - {"SHA256SUMS"}
@@ -285,7 +285,10 @@ def main() -> None:
             assert set(evidence["main_ui"]["selected_order"]) == set(BACKUPS)
             install = home / ".marcel" / "marcel-agent"
             python = install / "venv" / "bin" / "python"
-            sha = subprocess.check_output(["git", "-C", str(install), "rev-parse", "HEAD"], env=env, text=True).strip()
+            sha = subprocess.check_output(
+                ["git", "-C", str(install), "rev-parse", "HEAD"],
+                env=env, text=True, encoding="utf-8", errors="replace",
+            ).strip()
             assert sha == expected_sha
             evidence["installed_sha"] = sha
             config = installed_config(python, install, env)
@@ -293,7 +296,7 @@ def main() -> None:
             main_order = config["marcel"]["orchestrator"]["fallback_models"]
             assert main_order == evidence["main_ui"]["selected_order"]
             assert [item["model"] for item in config["fallback_providers"]] == main_order
-            assert key not in (home / ".marcel" / "config.yaml").read_text()
+            assert key not in (home / ".marcel" / "config.yaml").read_text(encoding="utf-8")
             evidence["main_saved_and_reloaded"] = "passed"
             print("Normal install and zero-worker configuration reload passed.", flush=True)
             result = subprocess.run(
@@ -326,7 +329,7 @@ def main() -> None:
             assert worker["fallback_models"] == evidence["worker_ui"]["selected_order"]
             assert worker["budget"]["max_requests"] == 3
             assert worker["budget"]["max_duration_seconds"] == 90
-            assert key not in (home / ".marcel" / "config.yaml").read_text()
+            assert key not in (home / ".marcel" / "config.yaml").read_text(encoding="utf-8")
             assert main_order == config["marcel"]["orchestrator"]["fallback_models"]
             evidence["worker_saved_and_reloaded"] = "passed"
             result = subprocess.run(
@@ -364,7 +367,7 @@ def main() -> None:
             evidence["failure_type"] = type(exc).__name__
             raise
         finally:
-            args.evidence.write_text(json.dumps(evidence, indent=2) + "\n")
+            args.evidence.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print("Public Ubuntu / real Router pilot passed; disposable runtime removed.")
 
 

@@ -251,8 +251,10 @@ class TestIdleReapAndCapEviction(RemoteKernelBase):
         import threading
 
         gate = threading.Event()
+        cell_started = threading.Event()
 
         def slow_cat(command):
+            cell_started.set()
             gate.wait(10)
             return {"output": json.dumps(_cell()), "returncode": 0}
 
@@ -264,14 +266,15 @@ class TestIdleReapAndCapEviction(RemoteKernelBase):
         with patch("tools.code_kernel._lifecycle_limits", return_value=(1, 1800)):
             worker = threading.Thread(target=_run, args=(busy_env,), kwargs={"task": "busy"})
             worker.start()
-            while not any(k.attached for k in _REMOTE_KERNELS.values()):
-                pass
-            env = ScriptedEnv(_spawn_ok_handlers([_cell()]))
-            _run(env, task="settled")
-            owners = {key[0] for key in _REMOTE_KERNELS}
-            self.assertIn("busy", owners)
-            gate.set()
-            worker.join(10)
+            try:
+                self.assertTrue(cell_started.wait(10), "Busy cell did not start")
+                env = ScriptedEnv(_spawn_ok_handlers([_cell()]))
+                _run(env, task="settled")
+                owners = {key[0] for key in _REMOTE_KERNELS}
+                self.assertIn("busy", owners)
+            finally:
+                gate.set()
+                worker.join(10)
         self.assertFalse(any("kill 4242" in c for c in busy_env.commands))
 
 
