@@ -210,8 +210,12 @@ def constrain_worker_tools(child: Any, config: dict) -> None:
         return
     allowed = set(child.valid_tool_names)
     if config.get("permissions") == "selected" and config.get("toolsets"):
-        from toolsets import resolve_multiple_toolsets
-        allowed.intersection_update(resolve_multiple_toolsets(config["toolsets"]))
+        from toolsets import resolve_toolset
+        selected = {
+            tool for toolset in config["toolsets"]
+            for tool in resolve_toolset(toolset)
+        }
+        allowed.intersection_update(selected)
     if config.get("tools"):
         allowed.intersection_update(config["tools"])
     child._worker_allowed_tools = frozenset(allowed)
