@@ -89,6 +89,7 @@ class CodexAppServerClient:
         self._next_id = 1
         self._pending: dict[int, queue.Queue] = {}  # request id -> single-slot reply queue
         self._pending_lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._notifications: queue.Queue = queue.Queue()
         self._server_requests: queue.Queue = queue.Queue()
         self._stderr_lines: list[str] = []
@@ -122,9 +123,11 @@ class CodexAppServerClient:
         if self._closed:
             return
         self._closed = True
-        with contextlib.suppress(Exception):
-            if self._proc.stdin and not self._proc.stdin.closed:
-                self._proc.stdin.close()
+        with self._pending_lock:
+            pending, self._pending = self._pending, {}
+        for q in pending.values():
+            with contextlib.suppress(queue.Full):
+                q.put_nowait({"error": {"code": -32000, "message": "codex app-server client closed"}})
         try:
             self._proc.terminate()
             self._proc.wait(timeout=timeout)
@@ -132,6 +135,9 @@ class CodexAppServerClient:
             with contextlib.suppress(Exception):
                 self._proc.kill()
                 self._proc.wait(timeout=1.0)
+        with contextlib.suppress(Exception):
+            if self._proc.stdin and not self._proc.stdin.closed:
+                self._proc.stdin.close()
 
     def __enter__(self) -> "CodexAppServerClient":
         return self
@@ -141,17 +147,18 @@ class CodexAppServerClient:
 
     def request(self, method: str, params: Optional[dict] = None, timeout: float = 30.0) -> dict:
         """Send a request and block for ``result``; raise CodexAppServerError on ``error``."""
-        rid, self._next_id = self._next_id, self._next_id + 1
         q: queue.Queue = queue.Queue(maxsize=1)
         with self._pending_lock:
+            rid, self._next_id = self._next_id, self._next_id + 1
             self._pending[rid] = q
-        self._send({"id": rid, "method": method, "params": params or {}})
         try:
+            self._send({"id": rid, "method": method, "params": params or {}})
             msg = q.get(timeout=timeout)
         except queue.Empty:
+            raise TimeoutError(f"codex app-server method {method!r} timed out after {timeout}s")
+        finally:
             with self._pending_lock:
                 self._pending.pop(rid, None)
-            raise TimeoutError(f"codex app-server method {method!r} timed out after {timeout}s")
         if "error" in msg:
             err = msg["error"]
             raise CodexAppServerError(code=err.get("code", -1), message=err.get("message", ""), data=err.get("data"))
@@ -201,8 +208,9 @@ class CodexAppServerClient:
         if self._proc.stdin is None:
             raise RuntimeError("codex app-server stdin not available")
         try:
-            self._proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
-            self._proc.stdin.flush()
+            with self._write_lock:
+                self._proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
+                self._proc.stdin.flush()
         except (BrokenPipeError, ValueError) as exc:
             raise RuntimeError(f"codex app-server stdin closed unexpectedly: {exc}") from exc
 

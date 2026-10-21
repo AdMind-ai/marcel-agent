@@ -181,6 +181,9 @@ class CodexAppServerSession:
             return self._thread_id
         if self._client is None:
             self._client = self._client_factory(codex_bin=self._codex_bin, codex_home=self._codex_home)
+        operation = getattr(self, "_worker_operation", None)
+        if operation is not None:
+            operation.check()
         self._client.initialize(client_name="marcel", client_title="Marcel Agent", client_version=_get_marcel_version())
         # Permissions are NOT sent on thread/start: codex gates ``thread/start.permissions``
         # behind experimentalApi + a matching ``[permissions]`` table in ~/.codex/config.toml.
@@ -305,6 +308,24 @@ class CodexAppServerSession:
             except Exception:  # pragma: no cover - display callback
                 logger.debug("on_event callback raised", exc_info=True)
         _apply_accounting_notification(result, note)
+        if note.get("method") == "thread/tokenUsage/updated":
+            from agent.transports.worker_budget import codex_total_usage
+            total = codex_total_usage(((note.get("params") or {}).get("tokenUsage") or {}).get("total"))
+            previous = getattr(self, "_reported_token_total", None)
+            self._reported_token_total = total
+            operation = getattr(self, "_worker_operation", None)
+            baseline = getattr(self, "_worker_token_baseline", None)
+            if operation is not None:
+                delta = (
+                    {key: total[key] - baseline[key] for key in total}
+                    if total is not None and baseline is not None else None
+                )
+                if delta is not None and (
+                    any(v < 0 for v in delta.values())
+                    or (previous is not None and any(total[k] < previous[k] for k in total))
+                ):
+                    delta = None
+                operation.report(delta)
         self._track_pending_file_change(note)
         projection = projector.project(note)
         if projection.messages:
@@ -325,6 +346,46 @@ class CodexAppServerSession:
         self, user_input: Any, *, turn_timeout: float = 600.0,
         notification_poll_timeout: float = 0.25, post_tool_quiet_timeout: float = 90.0,
     ) -> TurnResult:
+        from agent.worker_accounting import current_worker
+        from agent.transports.worker_budget import ExternalWorkerOperation, cancel_external_process
+
+        def cancel():
+            self.request_interrupt()
+            # Best effort protocol cancellation, then terminate even an unresponsive peer.
+            client, thread_id, turn_id = self._client, self._thread_id, self._active_turn_id
+            if client is not None and thread_id is not None:
+                cancel_external_process(
+                    lambda: client.request("turn/interrupt", {
+                        "threadId": thread_id, "turnId": turn_id,
+                    }, timeout=0.1),
+                    self.close,
+                )
+            else:
+                self.close()
+
+        self._worker_token_baseline = (
+            {"input_tokens": 0, "output_tokens": 0} if self._thread_id is None
+            else getattr(self, "_reported_token_total", None)
+        )
+        try:
+            with ExternalWorkerOperation(current_worker(), "codex_app_server", cancel) as operation:
+                self._worker_operation = operation
+                operation.check()
+                return self._run_turn(
+                    user_input, turn_timeout=turn_timeout,
+                    notification_poll_timeout=notification_poll_timeout,
+                    post_tool_quiet_timeout=post_tool_quiet_timeout,
+                )
+        finally:
+            self._worker_operation = None
+            limits = current_worker()
+            if limits is not None and limits.exhausted:
+                self.close()
+
+    def _run_turn(
+        self, user_input: Any, *, turn_timeout: float = 600.0,
+        notification_poll_timeout: float = 0.25, post_tool_quiet_timeout: float = 90.0,
+    ) -> TurnResult:
         """Send a user message and block until turn/completed, bridging approvals and projecting items.
 
         post_tool_quiet_timeout: silence this long after a tool completes fast-fails and retires.
@@ -336,6 +397,7 @@ class CodexAppServerSession:
         """
         result = TurnResult()
         if self._start_for(result):
+            self._worker_operation.check()
             # Do not clear first: a hard stop arriving during ensure_started() must
             # be honored before launching a Codex turn.
             if self._interrupt_event.is_set():
@@ -434,6 +496,9 @@ class CodexAppServerSession:
         deadline = time.monotonic() + turn_timeout
         turn_complete = False
         while time.monotonic() < deadline and not turn_complete:
+            operation = getattr(self, "_worker_operation", None)
+            if operation is not None:
+                operation.check()
             if self._interrupt_event.is_set():
                 self._issue_interrupt(result.turn_id)
                 result.interrupted = True

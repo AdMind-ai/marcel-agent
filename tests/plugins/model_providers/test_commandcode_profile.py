@@ -257,7 +257,7 @@ class TestCommandCodeFetchModelsPickerContract:
         assert profile is not None
         assert "base_url" in inspect.signature(profile.fetch_models).parameters
 
-    def test_resolve_provider_full(self):
+    def test_resolve_provider_full(self, monkeypatch):
         """Both profiles must resolve through the model-switch path.
 
         Regression: ``resolve_provider_full`` only knew models.dev + overlay
@@ -266,10 +266,22 @@ class TestCommandCodeFetchModelsPickerContract:
         them.
         """
         from marcel_cli.providers import resolve_provider_full
+        from types import SimpleNamespace
+
+        # models.dev can add this formerly plugin-only provider with a new
+        # preferred key. Existing plugin credentials must remain valid.
+        monkeypatch.setattr(
+            "marcel_cli.providers._models_dev_info",
+            lambda name, *_args, **_kwargs: SimpleNamespace(
+                name="CommandCode", env=("CMD_API_KEY",),
+                api="https://api.commandcode.ai/provider/v1", doc="",
+            ) if name == "commandcode" else None,
+        )
 
         chat = resolve_provider_full("commandcode", {}, [])
         assert chat is not None and chat.id == "commandcode"
         assert chat.transport == "openai_chat"
+        assert chat.api_key_env_vars[0] == "CMD_API_KEY"
         assert "COMMANDCODE_API_KEY" in chat.api_key_env_vars
 
         anth = resolve_provider_full("commandcode-anthropic", {}, [])

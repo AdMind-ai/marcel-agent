@@ -3000,12 +3000,13 @@ run_setup_wizard() {
 
     cd "$INSTALL_DIR"
 
-    # Run marcel setup using the venv Python directly (no activation needed).
+    # Use the same Marcel entrypoint as the installed command. Module execution
+    # used to select the legacy wizard because argv[0] became main.py.
     # Redirect stdin from /dev/tty so interactive prompts work when piped from curl.
     if [ "$USE_VENV" = true ]; then
-        "$INSTALL_DIR/venv/bin/python" -m marcel_cli.main setup < /dev/tty
+        "$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/marcel" setup < /dev/tty
     else
-        python -m marcel_cli.main setup < /dev/tty
+        python "$INSTALL_DIR/marcel" setup < /dev/tty
     fi
 }
 

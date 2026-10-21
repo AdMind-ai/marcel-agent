@@ -1277,6 +1277,16 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
               "provider": "vendor",
               "metadata": {"capabilities": ["image_generation"]},
           },
+            {
+                "id": "vendor/unavailable-chat",
+                "available": False,
+                "capabilities": {"chat": True, "tools": True},
+            },
+            {
+                "id": "vendor/direct-only-chat",
+                "availability": "requires_direct_connection",
+                "capabilities": {"chat": True, "tools": True},
+            },
       ]
 
       def discover(url, key):
@@ -1289,6 +1299,11 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
       selected_worker_model = {"id": ""}
 
       def choose(label, choices, default, **_kwargs):
+        if label == "Orchestrator model" or label.startswith("Sub-agent model for "):
+          self.assertFalse(any(
+              bad in choice for choice in choices
+              for bad in ("vendor/image", "vendor/unavailable-chat", "vendor/direct-only-chat")
+          ))
         if label == "Connection":
           return next(
               index for index, choice in enumerate(choices)
@@ -1310,7 +1325,7 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
               index for index, choice in enumerate(choices)
               if "[vendor/chat]" in choice
           )
-          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1].split("]", 1)[0]
           return selected
         if label in {
             "Which image service should the main agent use by default?",
@@ -1410,7 +1425,7 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
               index for index, choice in enumerate(choices)
               if "[openai/gpt-6-astra]" in choice
           )
-          selected_main_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          selected_main_model["id"] = choices[selected].rsplit("[", 1)[1].split("]", 1)[0]
           return selected
         if label == "Sub-agent activity":
           return next(
@@ -1423,7 +1438,7 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
               index for index, choice in enumerate(choices)
               if "[openai/" in choice
           )
-          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1][:-1]
+          selected_worker_model["id"] = choices[selected].rsplit("[", 1)[1].split("]", 1)[0]
           return selected
         if label in {
             "Which image service should the main agent use by default?",

@@ -259,6 +259,9 @@ class CopilotACPClient:
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create_chat_completion))
         self.is_closed, self._active_process = False, None
         self._active_process_lock = threading.Lock()
+        self._usage = threading.local()
+        self._rpc_write_lock = threading.Lock()
+        self._active_session_id = None
 
     def close(self) -> None:
         with self._active_process_lock:
@@ -277,6 +280,7 @@ class CopilotACPClient:
         tools: list[dict[str, Any]] | None = None, tool_choice: Any = None, stream: bool = False, **_: Any,
     ) -> Any:
         prompt_text = _format_messages_as_prompt(messages or [], model=model, tools=tools, tool_choice=tool_choice)
+        self._usage.value = None
         response_text, reasoning = self._run_prompt(prompt_text, timeout_seconds=_effective_timeout(timeout), model=model)
         tool_calls, cleaned_text = _extract_tool_calls_from_text(response_text)
         message = SimpleNamespace(
@@ -285,7 +289,7 @@ class CopilotACPClient:
         )
         completion = SimpleNamespace(
             choices=[SimpleNamespace(message=message, finish_reason="tool_calls" if tool_calls else "stop")],
-            usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0, total_tokens=0, prompt_tokens_details=SimpleNamespace(cached_tokens=0)),
+            usage=self._usage.value,
             model=model or "copilot-acp",
         )
         return _completion_to_stream_chunks(completion) if stream else completion
@@ -323,10 +327,42 @@ class CopilotACPClient:
         return proc
 
     def _run_prompt(self, prompt_text: str, *, timeout_seconds: float, model: str | None = None) -> tuple[str, str]:
+        from agent.worker_accounting import current_worker
+        from agent.transports.worker_budget import ExternalWorkerOperation
+        with ExternalWorkerOperation(current_worker(), "acp", self._cancel_prompt) as operation:
+            return self._run_external_prompt(
+                prompt_text, timeout_seconds=timeout_seconds, model=model, operation=operation,
+            )
+
+    def _cancel_prompt(self):
+        from agent.transports.worker_budget import cancel_external_process
+        with self._active_process_lock:
+            proc = self._active_process
+        session_id = self._active_session_id
+
+        def send_cancel():
+            with self._rpc_write_lock:
+                proc.stdin.write(json.dumps({
+                    "jsonrpc": "2.0", "method": "session/cancel",
+                    "params": {"sessionId": session_id},
+                }) + "\n")
+                proc.stdin.flush()
+
+        if proc is not None and session_id:
+            cancel_external_process(send_cancel, self.close)
+        else:
+            self.close()
+
+    def _run_external_prompt(self, prompt_text: str, *, timeout_seconds: float, model: str | None, operation) -> tuple[str, str]:
         # The CLI's `--model` spawn flag is deliberately NOT used: `copilot --acp` validates it (unknown id
         # aborts the spawn) but ignores it for the session; the model is applied after session/new instead.
         requested_model = str(model or "").strip()
         proc = self._spawn()
+        try:
+            operation.check()
+        except BaseException:
+            self.close()
+            raise
         inbox: queue.Queue[dict[str, Any]] = queue.Queue()
         stderr_tail: deque[str] = deque(maxlen=40)
 
@@ -345,11 +381,14 @@ class CopilotACPClient:
         request_ids = iter(range(1, 1 << 62))
 
         def _request(method: str, params: dict[str, Any], *, text_parts: list[str] | None = None, reasoning_parts: list[str] | None = None) -> Any:
+            operation.check()
             request_id = next(request_ids)
-            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
-            proc.stdin.flush()
+            with self._rpc_write_lock:
+                proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
+                proc.stdin.flush()
             deadline = time.monotonic() + timeout_seconds
             while time.monotonic() < deadline and proc.poll() is None:
+                operation.check()
                 try:
                     msg = inbox.get(timeout=0.1)
                 except queue.Empty:
@@ -375,6 +414,7 @@ class CopilotACPClient:
             session_id = str(session.get("sessionId") or "").strip()
             if not session_id:
                 raise RuntimeError("Copilot ACP did not return a sessionId.")
+            self._active_session_id = session_id
             if requested_model and requested_model != "copilot-acp":
                 try:
                     if (selection := _model_selection_request(session, requested_model)) is not None:
@@ -386,9 +426,17 @@ class CopilotACPClient:
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
             prompt = {"sessionId": session_id, "prompt": [{"type": "text", "text": prompt_text}]}
-            _request("session/prompt", prompt, text_parts=text_parts, reasoning_parts=reasoning_parts)
+            result = _request("session/prompt", prompt, text_parts=text_parts, reasoning_parts=reasoning_parts)
+            raw_usage = result.get("usage") if isinstance(result, dict) else None
+            if isinstance(raw_usage, dict):
+                self._usage.value = {
+                    "prompt_tokens": raw_usage.get("inputTokens", raw_usage.get("input_tokens")),
+                    "completion_tokens": raw_usage.get("outputTokens", raw_usage.get("output_tokens")),
+                }
+            operation.report(self._usage.value)
             return "".join(text_parts), "".join(reasoning_parts)
         finally:
+            self._active_session_id = None
             self.close()
 
     def _handle_server_message(

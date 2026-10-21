@@ -17,6 +17,11 @@ if sys.platform == "win32":
     pytest.skip("curses is not available on Windows", allow_module_level=True)
 import curses
 
+@pytest.fixture(autouse=True)
+def full_terminal_for_renderer_tests(monkeypatch):
+    """These tests fake a curses screen; capability detection has its own real PTY tests."""
+    monkeypatch.setattr("marcel_cli.curses_ui.supports_curses_menu", lambda: True)
+
 from marcel_cli.curses_ui import (
     NAV_BACK,
     NAV_CANCEL,

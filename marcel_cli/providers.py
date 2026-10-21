@@ -183,6 +183,13 @@ def _overlay_pdef(canonical, ov: MarcelOverlay, name, env_vars, base_url, doc, s
                        source=source)
 
 
+_CATALOG_KEY_COMPATIBILITY = {
+    # Keep existing installations working when a provider joins models.dev
+    # under a different preferred environment-variable name.
+    "commandcode": ("COMMANDCODE_API_KEY",),
+}
+
+
 def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderDef]:
     """Look up a built-in provider by id or alias: models.dev catalog merged with the Marcel overlay;
     Marcel-only overlay (nous, openai-codex, …); plugin provider profiles with a concrete endpoint."""
@@ -192,7 +199,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     if mdev_info is not None:
         ov = overlay or MarcelOverlay()
         env_vars = list(mdev_info.env)
-        for ev in ov.extra_env_vars:
+        for ev in (*ov.extra_env_vars, *_CATALOG_KEY_COMPATIBILITY.get(canonical, ())):
             if ev not in env_vars:
                 env_vars.append(ev)
         return _overlay_pdef(canonical, ov, mdev_info.name, tuple(env_vars), ov.base_url_override or mdev_info.api,

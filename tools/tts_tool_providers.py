@@ -140,7 +140,10 @@ def _parse_json_body(response: Any, raw: bytes) -> Dict[str, Any]:
 
 
 def _read_tts_response_json(response: Any, *, label: str, limit: Optional[int] = None) -> Dict[str, Any]:
-    return _parse_json_body(response, _read_tts_response_bytes(response, label=label, limit=limit))
+    data = _parse_json_body(response, _read_tts_response_bytes(response, label=label, limit=limit))
+    from agent.worker_accounting import record_service_payload
+    record_service_payload(response, data)
+    return data
 
 
 def _write_bytes(output_path: str, audio_bytes: bytes) -> str:
@@ -152,7 +155,11 @@ def _write_bytes(output_path: str, audio_bytes: bytes) -> str:
 def _post_json(url: str, payload: Dict[str, Any], headers: Dict[str, str], **extra: Any):
     """Streaming ``requests.post`` with the shared 60s timeout (body read via the bounded readers)."""
     import requests
-    return requests.post(url, headers=headers, json=payload, timeout=60, stream=True, **extra)
+    from agent.worker_accounting import service_call
+    return service_call(
+        lambda request: requests.post(url, headers=headers, json=request, timeout=60, stream=True, **extra),
+        payload, source="tts:http", capture_receipt=True,
+    )
 
 
 # --- Auxiliary-model speech-tag rewrites ---
@@ -220,10 +227,14 @@ def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]
     api_key = _require_key("ELEVENLABS_API_KEY", "elevenlabs", "Get one at https://elevenlabs.io/")
     el_config = tts_config.get("elevenlabs") or {}
     client = _origin()._import_elevenlabs()(api_key=api_key, **_elevenlabs_environment_kwargs(el_config))
-    audio_generator = client.text_to_speech.convert(
-        text=text, voice_id=el_config.get("voice_id", DEFAULT_ELEVENLABS_VOICE_ID),
-        model_id=el_config.get("model_id", DEFAULT_ELEVENLABS_MODEL_ID),
-        output_format="opus_48000_64" if output_path.endswith(".ogg") else "mp3_44100_128")
+    from agent.worker_accounting import service_call
+    audio_generator = service_call(
+        lambda request: client.text_to_speech.convert(**request),
+        dict(text=text, voice_id=el_config.get("voice_id", DEFAULT_ELEVENLABS_VOICE_ID),
+             model_id=el_config.get("model_id", DEFAULT_ELEVENLABS_MODEL_ID),
+             output_format="opus_48000_64" if output_path.endswith(".ogg") else "mp3_44100_128"),
+        source="tts:elevenlabs",
+    )
     with open(output_path, "wb") as f:
         f.writelines(audio_generator)
     return output_path
@@ -453,10 +464,14 @@ def _generate_mistral_tts(text: str, output_path: str, tts_config: Dict[str, Any
     Mistral = _origin()._import_mistral_client()  # ImportError must escape the RuntimeError wrap
     try:
         with Mistral(**client_kwargs) as client:
-            response = client.audio.speech.complete(
-                model=mi_config.get("model", DEFAULT_MISTRAL_TTS_MODEL), input=text,
-                voice_id=mi_config.get("voice_id") or DEFAULT_MISTRAL_TTS_VOICE_ID,
-                response_format=_tts_response_format_from_path(output_path))
+            from agent.worker_accounting import service_call
+            response = service_call(
+                lambda request: client.audio.speech.complete(**request),
+                dict(model=mi_config.get("model", DEFAULT_MISTRAL_TTS_MODEL), input=text,
+                     voice_id=mi_config.get("voice_id") or DEFAULT_MISTRAL_TTS_VOICE_ID,
+                     response_format=_tts_response_format_from_path(output_path)),
+                source="tts:mistral",
+            )
             audio_bytes = base64.b64decode(response.audio_data)
     except ValueError:
         raise

@@ -46,6 +46,7 @@ def run_menu(monkeypatch):
         )
         monkeypatch.setitem(sys.modules, "curses", curses)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(curses_ui, "supports_curses_menu", lambda: True)
         monkeypatch.setattr(curses_ui, "flush_stdin", lambda: None)
         result = curses_ui.curses_radiolist(
             "Select default model:", [f"model-{i:02}" for i in range(20)],

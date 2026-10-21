@@ -13,7 +13,7 @@
 # between (config-schema bumps, venv layout changes, dependency floors).
 #
 # Usage:
-#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR] [--exclude-tag TAG]
+#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR] [--exclude-tag TAG] [--exclude-commit REF]
 #
 #   --count   how many tags to emit (default 5, minimum 1). Fewer tags than
 #             requested emits all of them.
@@ -21,6 +21,9 @@
 #   --exclude-tag
 #             omit one release tag before sampling (for example, the tag that
 #             triggered a release workflow).
+#   --exclude-commit
+#             omit every tag pointing at the update target commit, including
+#             annotated tags. Updating a release to itself is not an upgrade.
 #
 # Reads tags from the local checkout, so it needs one fetched with tags
 # (actions/checkout with fetch-depth: 0, or `fetch-tags: true`). A shallow
@@ -34,6 +37,7 @@ set -euo pipefail
 
 COUNT=5
 EXCLUDE_TAG=""
+EXCLUDE_COMMIT=""
 # Default to the repository containing this script, resolved through its real
 # path so a symlinked or copied script still reads the checkout it lives in
 # rather than whatever repo the caller happens to be standing in.
@@ -49,6 +53,9 @@ while [ "$#" -gt 0 ]; do
     --exclude-tag)
       [ "$#" -ge 2 ] || { echo 'error: --exclude-tag needs a value' >&2; exit 1; }
       EXCLUDE_TAG="$2"; shift 2 ;;
+    --exclude-commit)
+      [ "$#" -ge 2 ] || { echo 'error: --exclude-commit needs a value' >&2; exit 1; }
+      EXCLUDE_COMMIT="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -71,12 +78,24 @@ if [ -z "$REPO" ]; then
   REPO="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$script_dir")"
 fi
 
+if [ -n "$EXCLUDE_COMMIT" ]; then
+  EXCLUDE_COMMIT="$(git -C "$REPO" rev-parse --verify "$EXCLUDE_COMMIT^{commit}")"
+fi
+
 # Sort with SemVer precedence rather than sort -V.  The fourth numeric
 # component is retained for the historical CalVer-style tags; prereleases sort
 # before their final release, and numeric prerelease identifiers sort before
 # non-numeric identifiers.
 mapfile -t tags < <(
   git -C "$REPO" tag --list 'v*' |
+    while IFS= read -r tag; do
+      if [ -n "$EXCLUDE_COMMIT" ] &&
+         [ "$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")" = "$EXCLUDE_COMMIT" ]; then
+        echo "Excluding $tag: already at update target $EXCLUDE_COMMIT" >&2
+        continue
+      fi
+      printf '%s\n' "$tag"
+    done |
     { if [ -n "$EXCLUDE_TAG" ]; then grep -Fvx -- "$EXCLUDE_TAG" || true; else cat; fi; } |
     python3 -c '
 import re
@@ -116,7 +135,7 @@ fi
 
 total="${#tags[@]}"
 if [ "$total" -eq 0 ]; then
-  if [ -n "$EXCLUDE_TAG" ]; then
+  if [ -n "$EXCLUDE_TAG" ] || [ -n "$EXCLUDE_COMMIT" ]; then
     printf '[]\n'
     exit 0
   fi

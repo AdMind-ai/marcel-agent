@@ -161,6 +161,7 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "google-api-python-client==2.194.0",
         "google-auth==2.55.1",
         "google-auth-oauthlib==1.3.1",
+        "oauthlib==4.0.0",
         "google-auth-httplib2==0.3.1",
         # Explicit transitive pins: httplib2 <0.32 has a decompression-bomb DoS.
         "httplib2==0.32.0",

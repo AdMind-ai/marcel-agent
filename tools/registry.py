@@ -815,11 +815,13 @@ class ToolRegistry:
         if not entry:
             return tool_error(f"Unknown tool: {name}")
         try:
-            if entry.is_async:
-                from model_tools import _run_async
-                result = _run_async(entry.handler(args, **kwargs))
-            else:
-                result = entry.handler(args, **kwargs)
+            from agent.worker_accounting import tool_call
+            def execute():
+                if entry.is_async:
+                    from model_tools import _run_async
+                    return _run_async(entry.handler(args, **kwargs))
+                return entry.handler(args, **kwargs)
+            result = tool_call(execute, name, entry.toolset)
             return self._normalize_handler_result(name, result)
         except Exception as e:
             # exc_info already renders the exception, so keep the message copy bounded.

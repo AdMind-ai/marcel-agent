@@ -1,0 +1,124 @@
+{
+  "date": "2026-10-08",
+  "tag": "v0.21.0-rc.5",
+  "candidate_sha": "75df0f68aa40bee56b295596bc4bc1df8651f514",
+  "qualification": "PASSED: required normal-flow Router pilot only",
+  "evidence_kind": "allowlisted summary of live Actions artifacts",
+  "simulated": false,
+  "runs": [
+    {
+      "url": "https://github.com/AdMind-ai/marcel-agent/actions/runs/37793754273",
+      "artifact_id": 11557592442,
+      "conclusion": "failure",
+      "failure": "driver read noncanonical worker fallback field"
+    },
+    {
+      "url": "https://github.com/AdMind-ai/marcel-agent/actions/runs/37794311860",
+      "artifact_id": 11558027487,
+      "conclusion": "failure",
+      "failure": "registered-worker completion assertion"
+    },
+    {
+      "url": "https://github.com/AdMind-ai/marcel-agent/actions/runs/37795142370",
+      "artifact_id": 11557454544,
+      "conclusion": "failure",
+      "registered_worker_requested": true,
+      "successful_worker_result": false,
+      "result_check": "synchronous tool results only",
+      "historical_detector_limitation": "worker selector could be top-level or unsupported nested; runtime profile application not proven"
+    },
+    {
+      "url": "https://github.com/AdMind-ai/marcel-agent/actions/runs/37795912419",
+      "artifact_id": 11558453448,
+      "conclusion": "failure",
+      "failure": "registered-worker completion assertion",
+      "result_check": "correlated synchronous results and asynchronous runtime ledger",
+      "delegation_diagnostics": {
+        "registered_worker_requested": false,
+        "successful_worker_result": false,
+        "delegate_call_count": 1,
+        "tool_result_count": 1,
+        "result_error_count": 0,
+        "async_dispatch_count": 0,
+        "async_completed_count": 0,
+        "failure_signals": [],
+        "message_count": 12,
+        "main_output_has_worker_marker": true
+      }
+    },
+    {
+      "url": "https://github.com/AdMind-ai/marcel-agent/actions/runs/37803721445",
+      "artifact_id": 11560904508,
+      "qualification_driver_sha": "db0b4c7beb8cbf1c474e715e85c71e5802967984",
+      "conclusion": "success",
+      "result_check": "top-level named worker, canonical tool call ID, decoded runtime content and correlated asynchronous ledger",
+      "delegation_diagnostics": {
+        "registered_worker_requested": true,
+        "successful_worker_result": true,
+        "delegate_call_count": 1,
+        "nested_worker_only_count": 0,
+        "tool_result_count": 1,
+        "matched_tool_result_count": 1,
+        "unparsed_tool_result_count": 0,
+        "result_error_count": 0,
+        "async_dispatch_count": 1,
+        "async_completed_count": 1,
+        "completed_result_count": 1,
+        "model_consumption_result_count": 1,
+        "expected_model_result_count": 1,
+        "failure_signals": [],
+        "message_count": 12
+      }
+    }
+  ],
+  "confirmed": {
+    "public_asset_checksums": "passed",
+    "account_model_count": 57,
+    "normal_clean_ubuntu_install": "passed",
+    "installed_sha": "75df0f68aa40bee56b295596bc4bc1df8651f514",
+    "main_zero_workers_saved_and_reloaded": "passed",
+    "main_model": "openai/gpt-4.1-nano",
+    "main_live_response": "passed",
+    "fallback_models_live_responses": "passed",
+    "main_fallback_order_saved_and_reloaded": [
+      "openai/gpt-4o-mini",
+      "openai/gpt-4.1-mini"
+    ],
+    "worker_saved_and_reloaded": "passed",
+    "main_with_worker_live_delegation": "passed",
+    "worker": {
+      "model": "openai/gpt-4.1-nano",
+      "provider": "marcel",
+      "activity": "image_generation",
+      "fallback_models": [
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1-mini"
+      ],
+      "toolsets": ["file", "image_gen"],
+      "permissions": "selected",
+      "budget": {
+        "max_requests": 3,
+        "max_duration_seconds": 90
+      },
+      "image_service": "global",
+      "max_concurrency": 1
+    }
+  },
+  "not_confirmed_or_exercised": {
+    "image_generation": "not exercised; separate image-service test key absent",
+    "automatic_failover_on_outage": "not exercised; no injected outages",
+    "windows_installation": "not exercised",
+    "fullscreen_curses_ui": "not exercised"
+  },
+  "cleanup": {
+    "remote_test_secret_deleted": true,
+    "remote_test_environment_deleted": true,
+    "environment_absence_verified_http_status": 404,
+    "workspace_test_secret_preserved": true,
+    "runtime_state_uploaded": false
+  },
+  "published_release_and_asset_metadata_unchanged": true,
+  "product_patch_applied": false,
+  "general_product_stability_or_stable_release_qualified": false,
+  "new_release_or_stable_promotion": false
+}

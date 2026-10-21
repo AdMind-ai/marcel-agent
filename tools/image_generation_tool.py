@@ -248,14 +248,18 @@ def _upscale_image(image_url: str, original_prompt: str) -> Optional[Dict[str, A
     """Upscale via FAL's Clarity Upscaler; None on failure (caller keeps the original)."""
     try:
         logger.info("Upscaling image with Clarity Upscaler...")
-        handler = _submit_fal_request(UPSCALER_MODEL, arguments={
+        arguments = {
             "image_url": image_url, "prompt": f"{UPSCALER_DEFAULT_PROMPT}, {original_prompt}",
             "upscale_factor": UPSCALER_FACTOR, "negative_prompt": UPSCALER_NEGATIVE_PROMPT,
             "creativity": UPSCALER_CREATIVITY, "resemblance": UPSCALER_RESEMBLANCE,
             "guidance_scale": UPSCALER_GUIDANCE_SCALE,
             "num_inference_steps": UPSCALER_NUM_INFERENCE_STEPS,
-            "enable_safety_checker": UPSCALER_SAFETY_CHECKER})
-        result = _wait_fal_result(handler)
+            "enable_safety_checker": UPSCALER_SAFETY_CHECKER}
+        from agent.worker_accounting import service_call
+        result = service_call(
+            lambda request: _wait_fal_result(_submit_fal_request(UPSCALER_MODEL, arguments=request)),
+            arguments, source="image:fal:upscale",
+        )
         if result and "image" in result:
             up = result["image"]
             logger.info("Image upscaled successfully to %sx%s",
@@ -439,7 +443,11 @@ def image_generate_tool(
         endpoint, arguments = _prepare_fal_request(
             model_id, meta, prompt, aspect_ratio, seed,
             {k: v for k, v in overrides.items() if v is not None}, source_images)
-        result = _wait_fal_result(_submit_fal_request(endpoint, arguments=arguments))
+        from agent.worker_accounting import service_call
+        result = service_call(
+            lambda request: _wait_fal_result(_submit_fal_request(endpoint, arguments=request)),
+            arguments, source=f"image:fal:{endpoint}",
+        )
         generation_time = (datetime.datetime.now() - start_time).total_seconds()
         if not result or "images" not in result:
             raise ValueError("Invalid response from FAL.ai API — no images returned")
@@ -651,7 +659,8 @@ def _dispatch_to_plugin_provider(
             kwargs, image_url, reference_image_urls, upscale,
             model=(model.strip() if isinstance(model, str) and model.strip()
                    else None if explicit_provider else _read_configured_image_model()))
-        result = provider.generate(**kwargs)
+        from agent.worker_accounting import service_call
+        result = service_call(lambda request: provider.generate(**request), kwargs, source=f"image:{pname}")
     except Exception as exc:
         # A TypeError from generate() predating image_url support (third-party plugin not yet
         # updated): text-to-image keeps working; surface a clear note when an edit was requested.
@@ -708,7 +717,8 @@ def _maybe_route_managed_krea(
     kwargs: Dict[str, Any] = {"prompt": prompt, "aspect_ratio": aspect_ratio, "model": normalized}
     try:
         _add_provider_kwargs(kwargs, image_url, reference_image_urls, upscale)
-        result = provider.generate(**kwargs)
+        from agent.worker_accounting import service_call
+        result = service_call(lambda request: provider.generate(**request), kwargs, source="image:krea")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Managed Krea routing failed: %s", exc)
         return _provider_error(f"Managed Krea generation error: {exc}", "provider_exception")

@@ -2412,10 +2412,13 @@ function Install-Repository {
         git config --global windows.appendAtomically false 2>$null
 
         # Try SSH first, then HTTPS, with -c flag for atomic write fix
+        # Set autocrlf in the NEW repository before its first checkout. Setting
+        # it only after cloning turns already-written CRLF lock/config files
+        # into apparent local edits and blocks the subsequent pinned checkout.
         Write-Info "Trying SSH clone..."
         $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
         try {
-            Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch $RepoUrlSsh $InstallDir }
+            Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch --config core.autocrlf=false $RepoUrlSsh $InstallDir }
             if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
         } catch { }
         $env:GIT_SSH_COMMAND = $null
@@ -2424,7 +2427,7 @@ function Install-Repository {
             if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
             Write-Info "SSH failed, trying HTTPS..."
             try {
-                Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch $RepoUrlHttps $InstallDir }
+                Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch --config core.autocrlf=false $RepoUrlHttps $InstallDir }
                 if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
             } catch { }
         }
@@ -4534,11 +4537,11 @@ function Invoke-SetupWizard {
 
     Push-Location $InstallDir
 
-    # Run marcel setup using the venv Python directly (no activation needed)
+    # Use the canonical Marcel entrypoint, matching the installed command.
     if (-not $NoVenv) {
-        & ".\venv\Scripts\python.exe" -m marcel_cli.main setup
+        & ".\venv\Scripts\python.exe" ".\marcel" setup
     } else {
-        python -m marcel_cli.main setup
+        python ".\marcel" setup
     }
 
     Pop-Location

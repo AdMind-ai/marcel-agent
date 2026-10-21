@@ -915,14 +915,19 @@ class MarcelACPAgent(SlashCommandsMixin, acp.Agent):
             await self.prompt(prompt=[TextContentBlock(type="text", text=next_prompt)], session_id=session_id)
 
         usage = None
-        if any(result.get(k) is not None for k in ("prompt_tokens", "completion_tokens", "total_tokens")):
+        from tools.delegate_worker_limits import WorkerLimits
+        if all(WorkerLimits._number(result.get(k), integer=True)
+               for k in ("prompt_tokens", "completion_tokens", "total_tokens")):
             usage = Usage(
-                input_tokens=result.get("prompt_tokens", 0), output_tokens=result.get("completion_tokens", 0),
-                total_tokens=result.get("total_tokens", 0), thought_tokens=result.get("reasoning_tokens"),
+                input_tokens=result["prompt_tokens"], output_tokens=result["completion_tokens"],
+                total_tokens=result["total_tokens"], thought_tokens=result.get("reasoning_tokens"),
                 cached_read_tokens=result.get("cache_read_tokens"),
             )
         await self._send_usage_update(state)
-        return PromptResponse(stop_reason="cancelled" if cancelled else "end_turn", usage=usage)
+        return PromptResponse(
+            stop_reason="cancelled" if cancelled or result.get("exit_reason") == "worker_budget" else "end_turn",
+            usage=usage,
+        )
 
     # ---- Session settings (ACP protocol methods) -----------------------------
 

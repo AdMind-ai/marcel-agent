@@ -58,6 +58,24 @@ def agent(mock_manager):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("result,has_usage,stop_reason", [
+    ({"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}, True, "end_turn"),
+    ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, True, "end_turn"),
+    ({"prompt_tokens": 7}, False, "end_turn"),
+    ({"prompt_tokens": True, "completion_tokens": 2, "total_tokens": 9}, False, "end_turn"),
+    ({"completed": False, "exit_reason": "worker_budget"}, False, "cancelled"),
+])
+async def test_prompt_receipt_preserves_unknown_usage_and_budget_cancellation(
+    agent, mock_manager, result, has_usage, stop_reason,
+):
+    response = await agent.new_session(cwd="/tmp")
+    state = mock_manager.get_session(response.session_id)
+    receipt = await agent._finish_turn(state, response.session_id, None, result, None, True)
+    assert (receipt.usage is not None) is has_usage
+    assert receipt.stop_reason == stop_reason
+
+
+@pytest.mark.asyncio
 async def test_new_session_exposes_edit_approvals_as_modes_not_config_options(agent):
     resp = await agent.new_session(cwd="/tmp")
 

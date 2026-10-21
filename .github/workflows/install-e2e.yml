@@ -96,7 +96,7 @@ jobs:
             echo 'has-releases=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          picker_args=(--count '${{ inputs.tag-count || 5 }}')
+          picker_args=(--count '${{ inputs.tag-count || 5 }}' --exclude-commit "$GITHUB_SHA")
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             picker_args+=(--exclude-tag "$GITHUB_REF_NAME")
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&

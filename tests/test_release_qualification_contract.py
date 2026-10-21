@@ -489,6 +489,32 @@ def test_tag_trigger_excludes_the_current_release_from_update_sources():
     assert 'picker_args+=(--exclude-tag "$CANDIDATE_REF")' in workflow
 
 
+def test_release_picker_excludes_target_commit_not_only_tag_name(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    git = ["git", "-C", str(repo)]
+    subprocess.run(git + ["config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(git + ["config", "user.name", "test"], check=True)
+    subprocess.run(git + ["commit", "--allow-empty", "-qm", "old"], check=True)
+    subprocess.run(git + ["tag", "v0.21.0-rc.1"], check=True)
+    subprocess.run(git + ["commit", "--allow-empty", "-qm", "target"], check=True)
+    subprocess.run(git + ["tag", "v0.21.0-rc.3"], check=True)
+    subprocess.run(git + ["tag", "-am", "alias", "v0.21.0"], check=True)
+    script = REPO_ROOT / "scripts/sandbox/pick-release-tags.sh"
+    args = [str(script), "--repo", str(repo), "--exclude-commit", "HEAD"]
+    result = subprocess.run(args, check=True, capture_output=True, text=True)
+    assert result.stdout.strip() == '["v0.21.0-rc.1"]'
+    assert "Excluding v0.21.0-rc.3" in result.stderr
+    assert "Excluding v0.21.0:" in result.stderr
+    subprocess.run(git + ["tag", "-d", "v0.21.0-rc.1"], check=True)
+    assert subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip() == "[]"
+    invalid = subprocess.run(args[:-1] + ["missing-ref"], capture_output=True)
+    assert invalid.returncode != 0
+    workflow = (REPO_ROOT / ".github/workflows/install-e2e.yml").read_text()
+    assert '--exclude-commit "$GITHUB_SHA"' in workflow
+
+
 def test_workflow_doctor_policy_is_strict_and_secret_free():
     workflow = (REPO_ROOT / ".github/workflows/install-e2e.yml").read_text()
     assert "NO_COLOR=1 marcel doctor" in workflow
