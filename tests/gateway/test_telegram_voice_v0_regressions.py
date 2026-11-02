@@ -122,9 +122,12 @@ def _run_agent_runner(adapter):
 
 
 @pytest.mark.asyncio
-async def test_pending_voice_interrupt_reuses_transcript_and_echo():
+@pytest.mark.parametrize("echo", [None, True], ids=["private-default", "echo-opt-in"])
+async def test_pending_voice_interrupt_reuses_transcript_and_echo(echo):
     adapter = SimpleNamespace(send=AsyncMock())
     runner = _runner(adapter)
+    if echo is not None:
+        runner.config.stt_echo_transcripts = echo
     source = _source()
     event = MessageEvent(
         text="",
@@ -164,11 +167,14 @@ async def test_pending_voice_interrupt_reuses_transcript_and_echo():
     assert drain_text == interrupt_text
     assert drain_transcripts == interrupt_transcripts == ["hello once"]
     mock_transcribe.assert_called_once_with("/tmp/telegram-voice.ogg", None, "gateway")
-    adapter.send.assert_awaited_once_with(
-        "12345",
-        '🎙️ "hello once"',
-        metadata=None,
-    )
+    if echo:
+        adapter.send.assert_awaited_once_with(
+            "12345",
+            '🎙️ "hello once"',
+            metadata=None,
+        )
+    else:
+        adapter.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

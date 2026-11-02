@@ -204,7 +204,8 @@ class TestConversationLoopWiring:
         # pass and drives the progress decision.
         assert "original_bytes = serialized_messages_bytes(messages)" in src
         assert "new_bytes = serialized_messages_bytes(messages)" in src
-        assert "new_bytes < original_bytes * 0.95" in src
+        # Static tools/system bytes also count toward the HTTP body limit.
+        assert "new_bytes + overhead < (original_bytes + overhead) * 0.95" in src
         # The old token-scored expression is gone from the 413 branch's
         # decision. Isolate the 413 handler region: from its status line to
         # its terminal error. (Token scoring survives in the

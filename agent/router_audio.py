@@ -214,7 +214,7 @@ class RouterAudio:
             codec = "libopus" if format in {"ogg", "opus"} else "libmp3lame"
             try:
                 subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(path),
-                                "-c:a", codec, str(target)], capture_output=True, check=True, timeout=30)
+                                "-c:a", codec, str(target)], stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=30)
             except (OSError, subprocess.SubprocessError):
                 raise RouterServiceError("Could not encode the Router voice reply.", "audio_encoding_failed") from None
             path.unlink()
