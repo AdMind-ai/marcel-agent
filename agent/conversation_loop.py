@@ -967,10 +967,8 @@ def _compression_deferred_result(agent, messages: List[Dict], api_call_count: in
             "turn deferred: compression transiently blocked (%s) (session=%s) — not counting as "
             "compression exhaustion", block if isinstance(block, str) else "unknown guard", session,
         )
-        _final = (
-            "Context compression is temporarily paused after a recent failed attempt. Please retry "
-            "in a moment — compression will resume automatically (or run /compress to force a retry now)."
-        )
+        from agent.context_recovery import recovery_notice
+        _final = recovery_notice(messages, "cooldown")
     else:
         holder = getattr(agent, "_compression_skipped_due_to_lock", None)
         logger.info(

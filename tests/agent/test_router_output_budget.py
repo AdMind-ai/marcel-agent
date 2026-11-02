@@ -107,8 +107,12 @@ def test_logs_link_wire_and_error_without_user_content_or_secrets(caplog):
     assert records[0]["client_request_id"] == records[1]["client_request_id"] == kw["extra_headers"]["X-Client-Request-Id"]
     assert records[0]["serialized_value"] == 32768
     assert records[0]["serialized_type"] == "int"
-    assert records[1]["router_request_id"] == "req-router-fixture"
-    assert records[1]["http_status"] == 400
+    failed = next(record for record in records if record["state"] == "failed")
+    measured = next(record for record in records if record["state"] == "payload_measured")
+    assert failed["client_request_id"] == records[0]["client_request_id"]
+    assert measured["serialized_body_bytes"] > 0
+    assert failed["router_request_id"] == "req-router-fixture"
+    assert failed["http_status"] == 400
     assert all(record["timestamp_utc"].endswith("+00:00") and record["timezone"] for record in records)
     assert not any(secret in caplog.text for secret in (
         "PRIVATE_USER_TEXT", "SECRET_HEADER", "SECRET_INVALID_BUDGET", "PRIVATE_ERROR_BODY",

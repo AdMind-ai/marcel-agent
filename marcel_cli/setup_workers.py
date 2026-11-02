@@ -163,6 +163,11 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False,
                 ) for worker in imported):
                     setup.print_error("Worker template was not imported; no workers were changed.")
                     continue
+                if router_only and any(worker.get("activity") == "search" for worker in imported):
+                    from marcel_cli.setup_media_status import configure_router_search
+                    if not configure_router_search(setup, config, required=True):
+                        setup.print_error("Worker template was not imported: no Router search service was selected.")
+                        continue
                 for worker in imported:
                     print_worker_summary(setup, worker, config=config, router_only=router_only)
                 if setup.prompt_yes_no("Import these workers?", True):
@@ -174,8 +179,13 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False,
         worker["activity"] = ACTIVITIES[setup.prompt_choice("Sub-agent activity", list(ACTIVITY_LABELS), 1)]
         if not media_worker_ready(setup, worker["activity"], config, router_only=router_only):
             continue
+        if router_only and worker["activity"] == "search":
+            from marcel_cli.setup_media_status import configure_router_search
+            if not configure_router_search(setup, config, required=True):
+                setup.print_error("Research worker was not added: no Router search service was selected.")
+                continue
         setup._info({
-            "search": "Research worker: search and source-reading tools; access depends on the configured search backend.",
+            "search": "Research worker: the search service is selected separately. Now choose its reasoning/tool-use LLM, not a search engine.",
             "coding": "Coding worker: development tools; only executable chat/tool models are eligible.",
             "documents": "Documents worker: file, terminal and installed-skill tools; document engines must be installed separately.",
             "vision": "Vision worker: explicit image-understanding capability is required.",
@@ -183,7 +193,7 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False,
         }.get(worker["activity"], "Worker LLM: reasoning and tool use, not a media generator."), None)
         try:
             worker["model"] = _choose_model(
-                setup, f"Sub-agent model for {worker['activity']}",
+                setup, "Research worker reasoning LLM" if worker["activity"] == "search" else f"Sub-agent model for {worker['activity']}",
                 allow_automatic=True, activity=worker["activity"],
                 live_models=values.get("live_model_entries") if values["router_mode"] == "marcel_router" else None,
                 provider=values.get("direct_provider", "") if values["router_mode"] == "direct_provider" else "",

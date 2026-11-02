@@ -1,0 +1,5 @@
+name: marcel
+version: 1.0.0
+description: "Brave, Exa, Tavily and Perplexity search through Marcel Router."
+author: Admind Srl
+kind: backend

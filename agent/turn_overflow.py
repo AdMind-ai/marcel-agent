@@ -123,8 +123,11 @@ class _Recovery(OverflowVerdict):
         if self.compression_attempts <= cap:
             return None
         if payload_too_large:
+            from agent.context_recovery import recovery_notice
             return self.fail_turn(
-                f"Request payload too large: max compression attempts ({cap}) reached.",
+                recovery_notice(self.messages),
+                compression_exhausted=False, payload_too_large=True,
+                failure_kind="http_payload_too_large",
                 notices=(
                     f"❌ Max compression attempts ({cap}) reached for payload-too-large error.",
                     _RETRY_HINT,
@@ -220,6 +223,8 @@ def _recover_payload_too_large(st: _Recovery, _retry: TurnRetryState) -> Overflo
     payload bytes — never the token estimate, which is deliberately byte-blind to images
     and wedged sessions on "no progress"."""
     from agent.model_metadata import estimate_messages_tokens_rough
+    from agent.context_recovery import recovery_notice
+    from agent.payload_diagnostics import serialized_bytes
 
     agent = st.agent
     exhausted = st.count_attempt(payload_too_large=True)
@@ -240,6 +245,9 @@ def _recover_payload_too_large(st: _Recovery, _retry: TurnRetryState) -> Overflo
     # threshold. Token-scored progress here burned all attempts on "no progress" and wedged the session
     # permanently. (#88960 / #47339)
     original_bytes = serialized_messages_bytes(messages)
+    metrics = getattr(agent, "_router_request_metrics", None)
+    measured_body = metrics.get("serialized_body_bytes") if isinstance(metrics, dict) else None
+    overhead = max(0, measured_body - original_bytes) if type(measured_body) is int else (serialized_bytes(agent.tools or []) or 0)
     deferred = st.compress(st.request_tokens())
     if deferred is not None:
         return deferred
@@ -249,7 +257,7 @@ def _recover_payload_too_large(st: _Recovery, _retry: TurnRetryState) -> Overflo
     messages = st.messages
     st.approx_tokens = estimate_messages_tokens_rough(messages)
     new_bytes = serialized_messages_bytes(messages)
-    if len(messages) < original_len or (new_bytes > 0 and new_bytes < original_bytes * 0.95):
+    if new_bytes > 0 and new_bytes + overhead < (original_bytes + overhead) * 0.95:
         if len(messages) < original_len:
             agent._buffer_status(COMPRESSION_RETRY_MESSAGES_STATUS_TEMPLATE.format(before=original_len, after=len(messages)))
         else:
@@ -268,7 +276,9 @@ def _recover_payload_too_large(st: _Recovery, _retry: TurnRetryState) -> Overflo
         return st.done("continue")
 
     return st.fail_turn(
-        "Request payload too large (413). Cannot compress further.",
+        recovery_notice(st.messages),
+        compression_exhausted=False, payload_too_large=True,
+        failure_kind="http_payload_too_large",
         notices=("❌ Payload too large and cannot compress further.", _RETRY_HINT),
         log=("%s413 payload too large. Cannot compress further.", agent.log_prefix),
     )

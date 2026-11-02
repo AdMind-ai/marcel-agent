@@ -68,7 +68,8 @@ class TestPluginTTSProviders:
         """A provider with no setup_schema override gets a row built from
         ``display_name`` and ``name`` only."""
         tts_registry.register_provider(_FakeTTSProvider(name="minimal"))
-        rows = tools_config._plugin_tts_providers()
+        rows = [row for row in tools_config._plugin_tts_providers()
+                if row.get("tts_plugin_name") == "minimal"]
         assert len(rows) == 1
         assert rows[0]["name"] == "Minimal"  # display_name default
         assert rows[0]["tts_provider"] == "minimal"
@@ -93,7 +94,7 @@ class TestVisibleProvidersInjectsTTSPlugins:
         assert "Cartesia" in names
 
         # Plugin row has tts_provider key for write-path compat
-        plugin_rows = [r for r in visible if r.get("tts_plugin_name")]
+        plugin_rows = [r for r in visible if r.get("tts_plugin_name") == "cartesia"]
         assert len(plugin_rows) == 1
         assert plugin_rows[0]["tts_provider"] == "cartesia"
 

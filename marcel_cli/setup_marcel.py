@@ -2281,17 +2281,33 @@ def _setup_marcel_impl(config: dict) -> None:
     # Everything owned by the main agent is complete before its summary and before specialists.
     if not ROUTER_ONLY_ONBOARDING:
         _choose_image_provider(setup, config)
-    _print_main_agent_summary(setup, values, config)
     if ROUTER_ONLY_ONBOARDING:
-        from marcel_cli.setup_media_status import service_description
+        from marcel_cli.setup_media_status import (
+            configure_router_search, media_worker_ready, prepare_router_services, service_description,
+        )
+        prepare_router_services(values, config)
+        for kind, activity in (("image", "image_generation"), ("video", "video")):
+            if setup.prompt_yes_no(f"Configure Router {kind} generation?", default=False):
+                media_worker_ready(setup, activity, config, router_only=True)
+        if setup.prompt_yes_no("Configure Router web search?", default=False):
+            configure_router_search(setup, config)
         setup._info(
             "Router media services (separate from reasoning/tool-use models):",
             service_description(config, "image", router_only=True),
             service_description(config, "video", router_only=True),
-            "Media generation is unavailable until a Router runtime adapter is integrated. "
-            "Changing a global service would affect every worker that uses it.",
+            "Media engines and search services use the same Router connection as chat. "
+            "Changing a global service affects every worker that uses it.",
             None,
         )
+    _print_main_agent_summary(setup, values, config)
+    if ((config.get("marcel") or {}).get("router") or {}).get("mode") == "marcel_router":
+        from marcel_cli.setup_audio_preferences import configure_router_audio, prepare_router_audio
+        prepare_router_audio(config)
+        if setup.prompt_yes_no("Configure Router audio?", default=False):
+            configure_router_audio(setup, config)
+    elif setup.prompt_yes_no("Configure audio language and privacy?", default=False):
+        from marcel_cli.setup_audio_preferences import configure_audio_preferences
+        configure_audio_preferences(setup, config)
     setup._info(
         "Main agent configured:",
         f"- Identity: {values['agent_name']}",
@@ -2304,6 +2320,10 @@ def _setup_marcel_impl(config: dict) -> None:
     )
     from marcel_cli.setup_workers import configure_workers, print_worker_summary
     configure_workers(setup, values, router_only=ROUTER_ONLY_ONBOARDING, config=config)
+    if ROUTER_ONLY_ONBOARDING:
+        backend = (config.get("web") or {}).get("search_backend", "")
+        if str(backend).startswith("marcel-"):
+            values["web_backend"] = backend
     if values["router_mode"] == "direct_provider":
         _connect_required_direct_providers(setup, values, skip=handled_direct_providers)
     for worker in values["workers"]:

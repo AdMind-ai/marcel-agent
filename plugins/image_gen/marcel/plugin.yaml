@@ -1,0 +1,5 @@
+name: marcel
+version: 1.0.0
+description: "Image generation through Marcel Router using its configured key."
+author: Admind Srl
+kind: backend

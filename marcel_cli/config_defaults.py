@@ -1086,15 +1086,20 @@ DEFAULT_CONFIG = {
         },
     },
 
+    "audio": {
+        "recording_consent": False,
+        "audio_processing_consent": False,
+        "response_mode": "on_request",
+    },
     "stt": {
         "enabled": True,
         # Echo the raw transcript of gateway voice messages back as a 🎙️ message.
         "echo_transcripts": False,
         # No seeded "provider": a stored value counts as an explicit user pick; unset = autodetect
         # ladder. Valid: "local" (faster-whisper) | "groq" | "openai" | "mistral" | "elevenlabs" |
-        # "deepinfra". Global language hint unless a per-provider language overrides it. "en"
-        # because Whisper auto-detect misreads short/accented clips; "" = auto; or "es", "zh", ...
-        "language": "en",
+        # "deepinfra". Auto-detect unless the user explicitly selects a preferred language.
+        # A per-provider override remains authoritative.
+        "language": "auto",
         # Client-side ffmpeg silence trim before cloud upload (local whisper uses VAD): silence
         # inflates upload time, billing and hallucinations. Failure = raw upload.
         "cloud_trim_silence": True,

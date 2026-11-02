@@ -240,8 +240,10 @@ class TestDynamicParamGating(unittest.TestCase):
         props = VIDEO_GENERATE_SCHEMA["parameters"]["properties"]
         self.assertEqual(
             sorted(props),
-            ["aspect_ratio", "duration", "model", "prompt", "resolution"],
+            ["aspect_ratio", "duration", "job_id", "model", "prompt", "resolution"],
         )
+        self.assertEqual(props["job_id"]["type"], "string")
+        self.assertIn("Marcel Router only", props["job_id"]["description"])
 
 
 if __name__ == "__main__":

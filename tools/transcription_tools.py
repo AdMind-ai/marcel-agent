@@ -116,7 +116,8 @@ def _resolve_stt_language(
     if isinstance(stt_config, dict):
         candidates.append(stt_config.get("language"))
     candidates.append(os.getenv(LOCAL_STT_LANGUAGE_ENV))
-    return next((c.strip() for c in candidates if isinstance(c, str) and c.strip()), None)
+    chosen = next((c.strip() for c in candidates if isinstance(c, str) and c.strip()), None)
+    return None if chosen and chosen.lower() in {"auto", "automatic"} else chosen
 
 
 def _openai_audio_unavailable_reason() -> Optional[str]:
@@ -471,7 +472,7 @@ def _dispatch_stt_provider(
     # Fires after provider resolution and BEFORE any backend; ``language`` stays None unless a hook sets it.
     model, language, prompt = _apply_pre_transcription_hook(
         file_path=file_path, provider=provider, model=model,
-        language=_get_stt_section(stt_config, provider).get("language"), prompt=prompt, source=source,
+        language=_resolve_stt_language(provider, stt_config), prompt=prompt, source=source,
     )
     prompt = _enforce_prompt_length_limit(prompt, provider)
     if provider in BUILTIN_STT_PROVIDERS:
@@ -480,6 +481,8 @@ def _dispatch_stt_provider(
         model_name = _builtin_model_name(provider, stt_config, model)
         if provider in ("local", "local_command"):
             model_name = _normalize_local_model(model_name)
+        logger.info("STT dispatch provider=%s model=%s language=%s mode=transcription",
+                    provider, model_name, language or "auto")
         return handler(file_path, model_name, language=language, prompt=prompt)
     # Command providers: after built-ins (``stt.providers.openai.command`` can't override the
     # real handler) and BEFORE plugins, since config is more local than a plugin install.
@@ -543,10 +546,13 @@ def transcribe_audio(
 def transcribe_audio_local_fallback(file_path: str, model: Optional[str] = None) -> Dict[str, Any]:
     """Try an already-installed local STT backend without changing config: passive inbound-media
     recovery after the configured provider failed — never lazy-installs or falls through to cloud."""
+    stt = _load_stt_config()
+    if stt.get("provider") == "marcel":
+        return _error_result("Router-only audio: local STT fallback is disabled.", provider="marcel")
     error = _validate_audio_file(file_path)
     if error:
         return error
-    local_model = model or (_load_stt_config().get("local") or {}).get("model", DEFAULT_LOCAL_MODEL)
+    local_model = model or (stt.get("local") or {}).get("model", DEFAULT_LOCAL_MODEL)
     if _HAS_FASTER_WHISPER:
         return _transcribe_local(file_path, _normalize_local_model(local_model))
     if _has_local_command():

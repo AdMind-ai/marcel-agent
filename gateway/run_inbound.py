@@ -1921,7 +1921,7 @@ class GatewayInboundMixin:
                 logger.info("Configured STT failed for %s; recovered with local STT", path)
                 result = fallback
         if not result["success"]:
-            logger.info("Voice transcription failed for %s: %s", path, result.get("error", "unknown error"))
+            logger.info("Voice transcription failed; audio and transcript omitted from diagnostic logs.")
             return None, self._untranscribed_audio_note(path)
         transcript = result["transcript"]
         # STT may return success=True with an empty/whitespace transcript (silence, cut-off);
