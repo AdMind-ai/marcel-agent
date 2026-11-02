@@ -136,7 +136,7 @@ def print_worker_summary(setup: Any, worker: dict) -> None:
             setup._info(model_label(entry), None)
 
 
-def configure_workers(setup: Any, values: dict) -> None:
+def configure_workers(setup: Any, values: dict, *, router_only: bool = False) -> None:
     from marcel_cli.setup_marcel import (
         ACTIVITIES, ACTIVITY_LABELS, _choose_model, _choose_fallback_models, _choose_capabilities,
         _choose_concurrency, normalize_worker,
@@ -174,7 +174,7 @@ def configure_workers(setup: Any, values: dict) -> None:
             live_models=values.get("live_model_entries"),
             provider=values.get("direct_provider", "") if values["router_mode"] == "direct_provider" else "",
         )
-        if worker["activity"] == "search" and not values.get("search_provider_configured"):
+        if not router_only and worker["activity"] == "search" and not values.get("search_provider_configured"):
             setup._info(
                 "Choose how this specialist searches the web.",
                 "This is separate from the AI model selected above.",

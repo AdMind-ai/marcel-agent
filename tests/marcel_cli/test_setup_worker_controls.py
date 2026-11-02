@@ -50,7 +50,7 @@ def isolate_catalog():
 
 def catalog():
     return [
-        {"id": "marcel/reviewer", "alias_of": "provider/reviewer-2026",
+        {"id": "marcel/reviewer", "alias_of": "provider/reviewer-2026", "available": True,
          "provider": "Provider", "display_name": "Reviewer",
          "marcel": {"capabilities": {"chat": True, "tools": True}, "preview": True}},
         {"id": "provider/stable", "marcel": {"capabilities": {"chat": True, "tools": True}}},
@@ -143,6 +143,8 @@ def test_templates_validate_models_fallbacks_and_normalized_collisions(tmp_path)
 
 
 def install_wizard_ui(monkeypatch, template=None):
+    # These tests exercise the retained direct-provider worker path.
+    monkeypatch.setattr(wizard, "ROUTER_ONLY_ONBOARDING", False)
     events = []
     saved = []
     additions = iter([True, False])
