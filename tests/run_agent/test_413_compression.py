@@ -145,6 +145,64 @@ def test_current_user_turn_is_persisted_before_provider_call(agent):
 
 
 class TestHTTP413Compression:
+    def test_failed_http_payload_recovery_preserves_request_without_context_exhaustion(self, agent):
+        agent.client.chat.completions.create.side_effect = _make_413_error()
+        with (
+            patch.object(agent, "_compress_context", side_effect=lambda msgs, *_a, **_k: (msgs, "unchanged")),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("puoi mandarmi un audio?")
+        assert result["payload_too_large"] is True
+        assert not result.get("compression_exhausted")
+        assert agent.client.chat.completions.create.call_count == 1
+        assert any(m.get("content") == "puoi mandarmi un audio?" for m in result["messages"])
+
+    def test_three_worker_outputs_then_short_request_recovers_without_reset(self, agent):
+        calls = [
+            {"id": f"worker-{i}", "type": "function", "function": {"name": "delegate_task", "arguments": "{}"}}
+            for i in range(3)
+        ]
+        history = [
+            {"role": "user", "content": "Esegui tre lavori delegati."},
+            {"role": "assistant", "content": None, "tool_calls": calls},
+            *[{"role": "tool", "name": "delegate_task", "tool_call_id": f"worker-{i}",
+               "content": f"worker-{i}: risultato " * 4000} for i in range(3)],
+            {"role": "assistant", "content": "Consegnati deck.pptx, research.md e post.png."},
+        ]
+        agent.client.chat.completions.create.side_effect = [
+            _make_413_error(), _mock_response(content="Continuo dalla sessione originale.", finish_reason="stop"),
+        ]
+        def compact(messages, *_args, **_kwargs):
+            return [
+                {"role": "assistant", "content": "Tre risultati consegnati: deck.pptx, research.md, post.png."},
+                messages[-1],
+            ], "compressed prompt"
+        with (
+            patch.object(agent, "_compress_context", side_effect=compact),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("puoi mandarmi un audio?", conversation_history=history)
+        assert result["completed"]
+        assert result["final_response"] == "Continuo dalla sessione originale."
+        assert not result.get("compression_exhausted")
+        assert agent.client.chat.completions.create.call_count == 2
+
+    def test_fresh_greeting_does_not_prematurely_compress(self, agent):
+        agent.client.chat.completions.create.return_value = _mock_response(content="Ciao!", finish_reason="stop")
+        with (
+            patch.object(agent, "_compress_context") as compress,
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("ciao")
+        assert result["completed"]
+        compress.assert_not_called()
+
     """413 errors should trigger compression, not abort as generic 4xx."""
 
     def test_413_triggers_compression(self, agent):

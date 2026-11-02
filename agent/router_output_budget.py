@@ -51,6 +51,7 @@ def observe_router_client(agent: Any, sdk_client: Any = None) -> None:
             return
         current._router_response_metadata = {
             "client_request_id": request_id, "http_status": response.status_code,
+            "serialized_body_bytes": len(response.request.content),
             "router_request_id": next(
                 (value for key in REQUEST_ID_HEADERS if (value := _safe_id(response.headers.get(key)))),
                 None,
@@ -197,6 +198,14 @@ def enforce_router_output_budget(agent: Any, kwargs: dict, *, final: bool = Fals
             parameter=field, serialized_value=budget, serialized_type="int",
             final_invalid_candidate_types=invalid_types,
         )
+        from agent.payload_diagnostics import wire_metrics
+        agent._router_request_metrics = wire_metrics(kwargs)
+        compressor = getattr(agent, "context_compressor", None)
+        context_length = getattr(compressor, "context_length", None)
+        _event(agent, "payload_measured", **agent._router_request_metrics,
+               context_limit=context_length if type(context_length) is int else None,
+               context_limit_source="active_context_compressor",
+               http_413_origin="unknown")
     return kwargs
 
 
@@ -217,4 +226,6 @@ def record_router_result(agent: Any, *, response: Any = None, error: Any = None)
     _event(agent, "failed" if error is not None else "response_received",
            router_request_id=request_id,
            exception_type=type(error).__name__ if error is not None else None,
+           serialized_body_bytes=observed.get("serialized_body_bytes"),
+           http_413_origin="unknown" if (status or observed.get("http_status")) == 413 else None,
            http_status=status if type(status) is int else observed.get("http_status", 200 if error is None else None))

@@ -1,0 +1,5 @@
+name: marcel
+version: 1.0.0
+description: "Voice transcription through Marcel Router realtime, with explicit audio consent."
+author: Admind Srl
+kind: backend

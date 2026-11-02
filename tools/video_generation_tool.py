@@ -33,6 +33,10 @@ VIDEO_GENERATE_SCHEMA: Dict[str, Any] = {
     "parameters": {
         "type": "object",
         "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "Marcel Router only: resume a pending video job without submitting another paid generation. Keep the original prompt.",
+            },
             "prompt": {
                 "type": "string",
                 "description": (
@@ -206,6 +210,10 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
     # Drop None entries so providers see clean defaults.
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
     pname = getattr(provider, "name", "?")
+    if args.get("job_id"):
+        if pname != "marcel" or not isinstance(args["job_id"], str):
+            return tool_error("job_id can only resume a Marcel Router video job")
+        kwargs["job_id"] = args["job_id"]
 
     def _err(error: str, error_type: str) -> str:
         return json.dumps(error_response(
@@ -335,6 +343,8 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
         if notice:
             parts.append(f"- storage: {notice}")
     properties: Dict[str, Any] = {"prompt": static_props["prompt"]}
+    if provider.name == "marcel":
+        properties["job_id"] = static_props["job_id"]
     if can_i2v:
         properties["image_url"] = {
             "type": "string",

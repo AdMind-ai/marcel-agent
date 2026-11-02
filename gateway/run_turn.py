@@ -1554,10 +1554,10 @@ class GatewayTurnMixin:
         hidden_reasoning_incomplete = _is_gateway_hidden_reasoning_incomplete_turn(agent_result)
         _err = str(agent_result.get("error", "")).lower()
         # Multi-word phrases (not bare "exceed"/"token") avoid matching "rate limit exceeded".
-        is_context_overflow_failure = agent_failed_early and (
+        payload_failure = bool(agent_result.get("payload_too_large")) or "413" in _err or "payload too large" in _err
+        is_context_overflow_failure = agent_failed_early and not payload_failure and not agent_result.get("compression_deferred") and (
             bool(agent_result.get("compression_exhausted"))
             or any(p in _err for p in self._CONTEXT_OVERFLOW_ERROR_PHRASES)
-            or ("400" in _err and len(history) > 50)
         )
         if is_context_overflow_failure:
             logger.info(
@@ -1577,15 +1577,14 @@ class GatewayTurnMixin:
         return agent_failed_early, hidden_reasoning_incomplete, is_context_overflow_failure
 
     async def _hmwa_compression_exhaustion_reset(
-        self, agent_result, response, session_entry, session_key, source,
+        self, agent_result, response, session_entry, session_key, source, pending_request=None,
     ):
-        """Auto-reset a permanently oversized session so the next message starts fresh instead of
-        replaying the oversized context forever. Never on a lock-contended defer — that is the
-        OPPOSITE case (a concurrent path holds the lock and is shrinking it). Returns
-        ``(response, session_entry)``."""
-        # When compression is exhausted, the session is permanently too large to process. (#9893) Never wipe
-        # the session for that — retry-next-message semantics apply (#69870 lock-skip consumer; salvaged
-        # from #49874).
+        """Keep the session binding and a private recovery copy; never reset on compression failure.
+
+        The legacy method name is retained for callers. /new remains an explicit user choice.
+        """
+        # An output-truncated summary, HTTP byte limit or transient failure is not permission
+        # to rotate a conversation. Preserve pending work and leave /new to the user.
         if agent_result.get("compression_deferred"):
             logger.info(
                 "Compression deferred for session %s — the compression "
@@ -1593,31 +1592,33 @@ class GatewayTurnMixin:
                 "session intact; the next message retries normally.",
                 session_entry.session_id if session_entry else "?",
             )
-        elif agent_result.get("compression_exhausted") and session_entry and session_key:
-            logger.info("Auto-resetting session %s after compression exhaustion.", session_entry.session_id)
-            new_entry = await self.async_session_store.reset_session(session_key)
-            self._evict_cached_agent(session_key)
-            # Conversation boundary: the funnel clears every conversation-scoped per-session dict.
-            self._clear_conversation_scope(session_key, reason="compression_exhausted_reset")
-            if new_entry is not None:
-                # Re-point the Telegram topic binding at the fresh session, or the binding-heal walk
-                # switches the next message back onto the bloated child and re-triggers exhaustion
-                # forever. No-op on non-topic lanes.
-                # Compression rotated session_entry.session_id to the oversized compressed child earlier
-                # this turn (the agent-result sync above), and that _sync also rewrote the (chat_id,
-                # thread_id) -> bloated-child binding. reset_session swaps in a clean, parentless session,
-                # but without re-syncing the binding the next inbound message in this topic gets
-                # switch_session'd back onto the bloated child by the binding-heal walk, reloads the
-                # oversized transcript, and re-triggers compression exhaustion forever (#35809 — regression
-                # of the #9893/#10063 auto-reset).
-                session_entry = new_entry
-                await asyncio.to_thread(
-                    self._sync_telegram_topic_binding, source, session_entry, reason="compression-exhausted-reset",
+        elif (agent_result.get("compression_exhausted") or agent_result.get("payload_too_large")) and session_entry and session_key:
+            from agent.context_recovery import recovery_language, recovery_notice, save_recovery_snapshot
+            messages = agent_result.get("messages")
+            messages = messages if isinstance(messages, list) else []
+            language_messages = [*messages, pending_request] if pending_request else messages
+            payload = bool(agent_result.get("payload_too_large"))
+            response = recovery_notice(language_messages, "payload" if payload else "compression")
+            try:
+                snapshot = await asyncio.to_thread(
+                    save_recovery_snapshot, session_entry.session_id, messages,
+                    pending_request=pending_request,
+                    reason="http_payload_too_large" if payload else "compression_exhausted",
                 )
-            response = (response or "") + (
-                "\n\n🔄 Session auto-reset — the conversation exceeded the maximum context size and "
-                "could not be compressed further. Your next message will start a fresh session."
-            )
+                agent_result["recovery_snapshot"] = snapshot
+                response += (
+                    f"\nCopia di recupero della sessione e della richiesta: {snapshot}."
+                    if recovery_language(language_messages) == "it" else
+                    f"\nRecovery copy of the session and pending request: {snapshot}."
+                )
+            except Exception:
+                logger.error("Context recovery snapshot could not be saved; session was NOT reset.")
+                response += (
+                    "\nImpossibile salvare la copia di recupero: verifica lo spazio e i permessi di scrittura."
+                    if recovery_language(language_messages) == "it" else
+                    "\nRecovery copy could not be saved: check storage space and write permissions."
+                )
+            agent_result["session_preserved"] = True
         return response, session_entry
 
     @staticmethod
@@ -2016,6 +2017,7 @@ class GatewayTurnMixin:
             )
             response, session_entry = await self._hmwa_compression_exhaustion_reset(
                 agent_result, response, session_entry, session_key, source,
+                pending_request=self._hmwa_user_transcript_entry(event, prepared, None),
             )
             await self._hmwa_persist_turn_transcript(
                 event=event, source=source, session_entry=session_entry, session_key=session_key,

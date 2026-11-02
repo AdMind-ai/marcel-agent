@@ -3198,11 +3198,23 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         _aux_call_start = time.monotonic()
         _latency_info: Dict[str, int] = {"prompt_build_ms": max(0, int((_aux_call_start - prompt_started_at) * 1000))}
         call_kwargs["latency_info"] = _latency_info
+        from uuid import uuid4
+        client_request_id = str(uuid4())
+        call_kwargs["extra_headers"] = {"X-Client-Request-Id": client_request_id}
+        response = None
+        failure = None
         try:
             # Compression is atomic: shield the summary call from gateway interrupts. Re-entrant.
             with aux_interrupt_protection():
                 response = call_llm(**call_kwargs)
+        except Exception as error:
+            failure = error
+            raise
         finally:
+            from agent.payload_diagnostics import log_summary_request
+            log_summary_request(call_kwargs["messages"], _aux_route, response=response, error=failure,
+                                elapsed_ms=int((time.monotonic() - _aux_call_start) * 1000),
+                                client_request_id=client_request_id)
             route_known = bool(_aux_route.get("provider") and _aux_route.get("model"))
             _aux_model = _aux_route.get("model") or self.summary_model or self.model or ""
             self._record_aux_compression_call(
@@ -3281,7 +3293,22 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             has_user_turn = self._transcript_has_real_user_turn(turns_to_summarize)
         prompt = self._build_summary_prompt(content_to_summarize, summary_budget, focus_topic, memory_context, has_user_turn)
         try:
-            content = self._call_summary_llm(prompt, prompt_started_at)
+            try:
+                content = self._call_summary_llm(prompt, prompt_started_at)
+            except Exception as initial_error:
+                from agent.payload_diagnostics import compact_utf8_input, http_status
+                if not (_classify_summary_failure(initial_error).truncated or http_status(initial_error) == 413):
+                    raise
+                # One changed, smaller request, never a partial checkpoint or an unchanged retry.
+                # No wire output cap: leave room for reasoning and provider-specific accounting.
+                compact_input = compact_utf8_input(content_to_summarize, 24_000)
+                compact_prompt = self._build_summary_prompt(
+                    compact_input, min(summary_budget, 768),
+                    compact_utf8_input(focus_topic, 2000) if focus_topic else None,
+                    compact_utf8_input(memory_context, 6000), has_user_turn, compact=True,
+                )
+                logger.info("Compression recovery: one compact-summary retry; original history retained until validation.")
+                content = self._call_summary_llm(compact_prompt, prompt_started_at)
             # Strip <think> blocks: they would be stored, injected, and compounded on every iterative update.
             from agent.agent_runtime_helpers import strip_think_blocks
             content = strip_think_blocks(None, content).strip() or content
@@ -3305,7 +3332,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
 
     def _build_summary_prompt(
         self, content_to_summarize: str, summary_budget: int, focus_topic: Optional[str],
-        memory_context: str, has_user_turn: bool,
+        memory_context: str, has_user_turn: bool, *, compact: bool = False,
     ) -> str:
         """Assemble the summarizer prompt (fresh or iterative-update form); focus guidance goes last so it takes precedence."""
         _memory_section = _memory_provider_section(memory_context)
@@ -3322,11 +3349,14 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             "not preserve their values."
         )
         # Lean mode folds the session log into this SAME single request (one aux call).
-        _session_log_section = _LEAN_SESSION_LOG_SECTION if getattr(self, "tail_mode", "lean") == "lean" else ""
+        _session_log_section = _LEAN_SESSION_LOG_SECTION if not compact and getattr(self, "tail_mode", "lean") == "lean" else ""
         _template_sections = self._summary_template_sections(_section, summary_budget, _session_log_section)
         if self._previous_summary:
             # Iterative update. Bound the previous summary too: a rehydrated handoff can be huge.
             _bounded_previous_summary = self._bound_summary_input(self._previous_summary)
+            if compact:
+                from agent.payload_diagnostics import compact_utf8_input
+                _bounded_previous_summary = compact_utf8_input(_bounded_previous_summary, 12_000)
             prompt = f"""{_summarizer_preamble}
 
 You are updating a context compaction summary. A previous compaction produced the summary below. New conversation turns have occurred since then and need to be incorporated.

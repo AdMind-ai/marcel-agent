@@ -1,0 +1,5 @@
+name: marcel
+version: 1.0.0
+description: "Asynchronous Sora and Veo video generation through Marcel Router."
+author: Admind Srl
+kind: backend

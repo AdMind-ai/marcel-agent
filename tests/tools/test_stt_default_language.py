@@ -1,18 +1,13 @@
-"""Default STT language contract.
-
-Teknium (July 2026): the global ``stt.language`` DEFAULTS to "en" because
-Whisper auto-detection frequently misidentifies short/accented clips
-("STT transcribed the wrong language" class). Users opt back into
-auto-detect with ``stt.language: ""``.
-"""
+"""Multilingual installs must not silently force English transcription."""
 
 from marcel_cli.config import DEFAULT_CONFIG
 from tools.transcription_tools import _resolve_stt_language
 
 
 class TestDefaultSttLanguage:
-    def test_default_config_pins_english(self):
-        assert DEFAULT_CONFIG["stt"]["language"] == "en"
+    def test_default_config_detects_language(self):
+        assert DEFAULT_CONFIG["stt"]["language"] == "auto"
+        assert _resolve_stt_language("openai", DEFAULT_CONFIG["stt"]) is None
 
 
     def test_per_provider_still_wins_over_default(self, monkeypatch):

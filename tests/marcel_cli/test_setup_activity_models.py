@@ -139,8 +139,9 @@ def test_router_media_is_not_falsely_enabled_by_a_chat_model_or_catalog(activity
     output = str(ui._info.call_args_list) + str(ui.print_error.call_args_list)
     assert f"Uses global {kind} service: outside-router / existing-model" in output
     assert "global service change affects every worker" in output
-    assert "not configured or supported by this connection" in output
-    assert "chat model is not a replacement" in output
+    assert "Cannot load the Router" in output
+    assert "no worker was added" in output
+    assert "separate from the media generator" in output
 
 
 def test_router_media_worker_is_not_saved_and_never_requests_a_direct_key():
@@ -212,7 +213,7 @@ def test_media_worker_summary_distinguishes_brain_from_shared_engine():
     output = str(ui._info.call_args_list)
     assert "Reasoning/tool-use model: vendor/chat" in output
     assert "Uses global video service: existing / video-model" in output
-    assert "not configured or supported" in output
+    assert "not configured for this Router connection" in output
 
 
 def test_document_worker_choices_roundtrip_without_touching_global_media(monkeypatch, tmp_path, capsys):
