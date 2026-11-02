@@ -225,6 +225,7 @@ class MarcelSetupTests(unittest.TestCase):
         patch("marcel_cli.setup_marcel._choose_image_provider"),
         patch("marcel_cli.setup_marcel.ensure_marcel_soul"),
         patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"),
+        patch("marcel_cli.setup_marcel.ROUTER_ONLY_ONBOARDING", False),
     ):
       setup_marcel({})
 
@@ -367,6 +368,7 @@ class MarcelSetupTests(unittest.TestCase):
         patch("marcel_cli.setup_marcel._choose_voice_model"),
         patch("marcel_cli.setup_marcel._choose_image_provider"),
         patch("marcel_cli.setup_marcel._choose_model", side_effect=choose_model),
+        patch("marcel_cli.setup_marcel.ROUTER_ONLY_ONBOARDING", False),
         patch("marcel_cli.setup_marcel.ensure_marcel_soul"),
         patch("marcel_cli.setup_marcel.ensure_memory_maintenance_job"),
     ):
@@ -1089,7 +1091,7 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
 
   def _run_setup(
       self, home, choose, checklist, text, yes_no, *,
-      discover=None, models_dev_fixture=None, initial_config=None,
+      discover=None, models_dev_fixture=None, initial_config=None, router_only=False,
   ):
     from agent import models_dev
     from marcel_cli import config as config_module
@@ -1110,10 +1112,15 @@ class MarcelSetupIntegrationTests(unittest.TestCase):
 
     def scripted_yes_no(label, default=True):
       events.append(label)
+      if label.startswith("Trust the new Router origin https://router.integration.test/"):
+        return True  # These fixtures deliberately use an alternate Router host.
       return yes_no(label, default)
 
     with patch.dict(os.environ, {"MARCEL_HOME": str(home)}, clear=False):
       with ExitStack() as stack:
+        # Keep legacy connection/media coverage while production onboarding is Router-only.
+        stack.enter_context(patch("marcel_cli.setup_marcel.ROUTER_ONLY_ONBOARDING",
+                                  router_only))
         stack.enter_context(patch.object(setup_cli_module, "prompt_choice",
                                          side_effect=scripted_choice))
         stack.enter_context(patch.object(setup_cli_module, "prompt_checklist",

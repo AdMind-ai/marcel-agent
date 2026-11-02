@@ -33,6 +33,8 @@ ACTIVITY_LABELS = (
     "Legacy image worker (same as image generation)",
 )
 ROUTER_MODES = ("marcel_router", "direct_provider", "custom_endpoint")
+# Launch scope: retain alternate connection code, but do not expose it in setup.
+ROUTER_ONLY_ONBOARDING = True
 ACCOUNT_TYPES = ("google_workspace", "imap_smtp")
 MARCEL_SITE_URL = "https://marcel-agent.com"
 MARCEL_ROUTING_SITE_URL = f"{MARCEL_SITE_URL}/routing"
@@ -394,6 +396,7 @@ def _normalized_router_origin(base_url: str) -> str:
 
 def _normalize_router_models(payload: Any) -> list[dict[str, Any]]:
     """Return the live Router entries, retaining only safe model metadata."""
+    from marcel_cli.setup_model_labels import metadata, capabilities, availability
     models = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(models, list):
         return []
@@ -402,30 +405,30 @@ def _normalize_router_models(payload: Any) -> list[dict[str, Any]]:
     for raw in models:
         if not isinstance(raw, dict):
             continue
-        model_id = str(raw.get("id") or raw.get("name") or "").strip()
+        model_id = raw.get("id") or raw.get("name") or ""
+        if not isinstance(model_id, str):
+            continue
+        model_id = model_id.strip()
         if not model_id or model_id in seen:
             continue
         seen.add(model_id)
-        metadata = raw.get("metadata")
-        marcel_metadata = raw.get("marcel")
-        if isinstance(metadata, dict):
-            metadata = dict(metadata)
-        elif isinstance(marcel_metadata, dict):
-            metadata = dict(marcel_metadata)
-        else:
-            metadata = {}
+        model_metadata = metadata(raw)
+        availability_state = availability(raw)
         normalized.append({
             "id": model_id,
-            "provider": str(raw.get("provider") or metadata.get("provider") or "").strip(),
-            "owned_by": str(raw.get("owned_by") or metadata.get("owned_by") or "").strip(),
-            "preview": bool(raw.get("preview") or metadata.get("preview")),
-            "available": raw.get("available", metadata.get("available", True)),
-            "availability": raw.get("availability", metadata.get("availability")),
-            "capabilities": raw.get("capabilities", metadata.get("capabilities")),
-            "canonical_id": raw.get("canonical_id", metadata.get("canonical_id")),
-            "alias_of": raw.get("alias_of", metadata.get("alias_of")),
-            "is_alias": raw.get("is_alias", metadata.get("is_alias", False)),
-            "metadata": metadata,
+            "provider": str(raw.get("provider") or model_metadata.get("provider") or "").strip(),
+            "owned_by": str(raw.get("owned_by") or model_metadata.get("owned_by") or "").strip(),
+            "preview": bool(raw.get("preview") or model_metadata.get("preview")),
+            "available": (
+                True if availability_state == "available" else
+                False if availability_state == "unavailable" else None
+            ),
+            "availability": raw.get("availability", model_metadata.get("availability")),
+            "capabilities": capabilities(raw),
+            "canonical_id": raw.get("canonical_id", model_metadata.get("canonical_id")),
+            "alias_of": raw.get("alias_of", model_metadata.get("alias_of")),
+            "is_alias": raw.get("is_alias", model_metadata.get("is_alias", False)),
+            "metadata": model_metadata,
         })
     return normalized
 
@@ -463,7 +466,8 @@ def _verify_marcel_router(base_url: str, api_key: str) -> tuple[bool, str]:
         return False, "Marcel Routing responded, but its model catalogue was not valid."
     from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG
     LIVE_SETUP_CATALOG.set(models)
-    return True, f"Connected successfully. {len(models)} models are available."
+    from marcel_cli.setup_model_labels import catalog_summary
+    return True, f"Connected to Marcel Router. {catalog_summary(models)}"
 
 
 def _discover_marcel_router_models(base_url: str, api_key: str) -> tuple[bool, str, list[dict[str, Any]]]:
@@ -501,7 +505,8 @@ def _discover_marcel_router_models(base_url: str, api_key: str) -> tuple[bool, s
         return False, "Marcel Routing responded, but its model catalogue was not valid.", []
     from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG
     LIVE_SETUP_CATALOG.set(models)
-    return True, f"Connected successfully. {len(models)} models are available.", models
+    from marcel_cli.setup_model_labels import catalog_summary
+    return True, f"Connected to Marcel Router. {catalog_summary(models)}", models
 
 
 def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
@@ -631,6 +636,7 @@ def normalize_account(account: dict[str, Any]) -> dict[str, Any]:
 
 def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
     """Build Marcel-owned metadata; runtime sections are applied separately."""
+    from marcel_cli.setup_model_labels import capabilities, metadata
     mode = str(values.get("router_mode") or "marcel_router").strip().lower()
     if mode not in ROUTER_MODES:
         raise ValueError(f"Unknown Marcel router mode: {mode}")
@@ -707,7 +713,13 @@ def build_marcel_config(values: dict[str, Any]) -> dict[str, Any]:
                 "provider": str(entry.get("provider") or "").strip(),
                 "owned_by": str(entry.get("owned_by") or "").strip(),
                 "preview": bool(entry.get("preview")),
-                "metadata": dict(entry.get("metadata") or {}),
+                "capabilities": capabilities(entry),
+                "available": entry.get("available"),
+                "availability": entry.get("availability"),
+                "canonical_id": entry.get("canonical_id"),
+                "alias_of": entry.get("alias_of"),
+                "is_alias": entry.get("is_alias", False),
+                "metadata": metadata(entry),
             }
             for entry in live_entries
             if isinstance(entry, dict) and str(entry.get("id") or "").strip()
@@ -1915,7 +1927,7 @@ def _setup_marcel_impl(config: dict) -> None:
                 "Secrets are referenced by environment variable and are never written to config.yaml.", None)
     agent_name = _prompt_agent_name(setup, str(existing.get("agent_name") or ""), reconfigure=bool(existing))
     current_mode = str(router.get("mode") or "marcel_router")
-    mode_index = setup.prompt_choice(
+    mode_index = 0 if ROUTER_ONLY_ONBOARDING else setup.prompt_choice(
         "Connection",
         [
             "Marcel Router — one router key for every selected model",
@@ -1989,10 +2001,18 @@ def _setup_marcel_impl(config: dict) -> None:
         )
         if values["router_mode"] == "marcel_router":
             key_env = values["api_key_ref"] or "MARCEL_ROUTER_API_KEY"
-            stored_origin = _normalized_router_origin(router.get("base_url"))
+            # Bind a verified key even if later model selection is cancelled and
+            # config.yaml has not yet been written. Older installations fall
+            # back to their saved Router URL (or the official first-run URL).
+            origin_env = f"{key_env}_ORIGIN"
+            stored_origin = _normalized_router_origin(
+                setup.get_env_value(origin_env)
+                or (router.get("base_url") if current_mode == "marcel_router" else "")
+                or MARCEL_ROUTER_BASE_URL
+            )
             prompted_origin = _normalized_router_origin(values["base_url"])
             existing_router_key = ""
-            if existing and prompted_origin and stored_origin != prompted_origin:
+            if prompted_origin and stored_origin != prompted_origin:
                 setup._info(
                     "Marcel Router origin changed",
                     "The saved key will not be reused for a different Router origin.",
@@ -2043,14 +2063,37 @@ def _setup_marcel_impl(config: dict) -> None:
                         values["live_model_entries"] = discovered
                         if router_key != existing_router_key:
                             setup.save_env_value(key_env, router_key)
+                        setup.save_env_value(
+                            origin_env, _normalized_router_origin(values["base_url"]))
+                        existing_router_key = router_key
                         setup.print_success(message)
-                        break
-                    setup.print_error(message)
+                        from marcel_cli.setup_model_labels import chat_models
+                        if chat_models(discovered):
+                            break
+                        setup.print_error(
+                            "No eligible orchestrator model. No available model explicitly "
+                            "declares supported chat and tool calling. Check account access "
+                            "or Router catalog metadata. Your key has been saved securely."
+                        )
+                    else:
+                        setup.print_error(message)
                 if not setup.prompt_yes_no("Retry Marcel Router connection?", True):
                     return
-                existing_router_key = ""
-                values["base_url"] = setup.prompt(
+                previous_origin = _normalized_router_origin(values["base_url"])
+                next_base_url = setup.prompt(
                     "Marcel Router base URL", values["base_url"])
+                try:
+                    next_base_url = _validate_router_url(next_base_url)
+                except ValueError as exc:
+                    setup.print_error(str(exc))
+                    return
+                if _normalized_router_origin(next_base_url) != previous_origin:
+                    if not setup.prompt_yes_no(
+                        f"Trust the new Router origin {next_base_url} and enter a fresh key?", False,
+                    ):
+                        return
+                    existing_router_key = ""
+                values["base_url"] = next_base_url
         else:
             try:
                 values["base_url"] = _validate_custom_endpoint_url(values["base_url"])
@@ -2111,13 +2154,14 @@ def _setup_marcel_impl(config: dict) -> None:
             setup, values, skip=handled_direct_providers)
 
     # A direct xAI key also enables video generation.
-    if setup.get_env_value("XAI_API_KEY"):
+    if not ROUTER_ONLY_ONBOARDING and setup.get_env_value("XAI_API_KEY"):
         config.setdefault("video_gen", {}).update(
             provider="xai", model="grok-imagine-video")
 
-    from marcel_cli.setup_tts import _setup_tts_provider
-    _setup_tts_provider(config, prompt_for_voice=False)
-    _choose_voice_model(setup, config, values["agent_name"])
+    if not ROUTER_ONLY_ONBOARDING:
+        from marcel_cli.setup_tts import _setup_tts_provider
+        _setup_tts_provider(config, prompt_for_voice=False)
+        _choose_voice_model(setup, config, values["agent_name"])
 
     memory_root = config.get("memory") if isinstance(config.get("memory"), dict) else {}
     memory = memory_root.get("maintenance") if isinstance(memory_root.get("maintenance"), dict) else {}
@@ -2217,7 +2261,8 @@ def _setup_marcel_impl(config: dict) -> None:
     values["telegram_configured"] = bool(setup.get_env_value("TELEGRAM_BOT_TOKEN"))
 
     # Everything owned by the main agent is complete before its summary and before specialists.
-    _choose_image_provider(setup, config)
+    if not ROUTER_ONLY_ONBOARDING:
+        _choose_image_provider(setup, config)
     _print_main_agent_summary(setup, values, config)
     setup._info(
         "Main agent configured:",
@@ -2230,7 +2275,7 @@ def _setup_marcel_impl(config: dict) -> None:
         None,
     )
     from marcel_cli.setup_workers import configure_workers, print_worker_summary
-    configure_workers(setup, values)
+    configure_workers(setup, values, router_only=ROUTER_ONLY_ONBOARDING)
     if values["router_mode"] == "direct_provider":
         _connect_required_direct_providers(setup, values, skip=handled_direct_providers)
     for worker in values["workers"]:
