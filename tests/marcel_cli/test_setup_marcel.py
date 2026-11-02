@@ -822,8 +822,8 @@ class MarcelSetupTests(unittest.TestCase):
 
   def test_vision_worker_model_and_fallbacks_are_explicit_vision_only(self):
     live = [
-      {"id": "chat", "metadata": {"capabilities": ["chat"]}},
-      {"id": "vision", "metadata": {"capabilities": ["chat"], "supports_vision": True}},
+      {"id": "chat", "metadata": {"capabilities": ["chat", "tools"]}},
+      {"id": "vision", "metadata": {"capabilities": ["chat", "tools"], "supports_vision": True}},
     ]
     self.assertEqual(
       [model_id for _, model_id in _fallback_catalog("vision", live)],

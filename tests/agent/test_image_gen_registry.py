@@ -55,6 +55,14 @@ class TestRegisterProvider:
 
 
 class TestGetActiveProvider:
+    def test_explicit_unknown_provider_never_falls_back(self, tmp_path, monkeypatch):
+        import yaml
+        monkeypatch.setenv("MARCEL_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text(
+            yaml.safe_dump({"image_gen": {"provider": "missing-selected-provider"}})
+        )
+        image_gen_registry.register_provider(_FakeProvider("fal"))
+        assert image_gen_registry.get_active_provider() is None
 
 
     def test_explicit_config_wins(self, tmp_path, monkeypatch):

@@ -361,6 +361,7 @@ class ClientLifecycleMixin:
 
     def _create_request_openai_client(self, *, reason: str, api_kwargs: Optional[dict] = None) -> Any:
         from unittest.mock import Mock
+        from agent.router_output_budget import observe_router_client
         primary_client = self._ensure_primary_openai_client(reason=reason)
         if self.provider == "moa" or isinstance(primary_client, Mock):
             return primary_client
@@ -375,6 +376,7 @@ class ClientLifecycleMixin:
             request_kwargs["default_headers"] = copilot_request_headers(is_agent_turn=True, is_vision=True)
         cached, stale = self._checkout_request_slot(_OPENAI_SLOT, request_kwargs)
         if cached is not None:
+            observe_router_client(self, cached)
             return cached
         if stale is not None:
             self._close_openai_client(stale, reason=f"reuse_evict:{reason}", shared=False)
@@ -382,6 +384,7 @@ class ClientLifecycleMixin:
         # Snapshot nested dicts (default_headers) so an aliased inner object can't mutate the cache key.
         snapshot = {k: dict(v) if isinstance(v, dict) else v for k, v in request_kwargs.items()}
         self._store_request_slot(_OPENAI_SLOT, client, snapshot)
+        observe_router_client(self, client)
         return client
 
     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
@@ -434,17 +437,20 @@ class ClientLifecycleMixin:
         The watchdog must never ``close()`` a client a worker is still reading (fd recycled under a live SSL BIO →
         TLS record in a SQLite header); per-request clients let the stranger ``shutdown()`` while the owner closes.
         """
+        from agent.router_output_budget import observe_router_client
         if self.api_mode == "anthropic_messages":
             self._try_refresh_anthropic_client_credentials()
         key = self._request_anthropic_client_key()
         cached, stale = self._checkout_request_slot(_ANTHROPIC_SLOT, key)
         if cached is not None:
+            observe_router_client(self, cached)
             return cached
         if stale is not None:
             self._close_request_anthropic_client(stale, reason=f"reuse_evict:{reason}")
         client = self._build_anthropic_client_for_key(key)
         logger.debug("Anthropic request client created (%s, shared=False) %s", reason, self._anthropic_log_context())
         self._store_request_slot(_ANTHROPIC_SLOT, client, key)
+        observe_router_client(self, client)
         return client
 
     def _close_request_anthropic_client(self, client: Any, *, reason: str) -> None:

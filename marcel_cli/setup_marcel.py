@@ -20,6 +20,7 @@ _WORKER_ID = re.compile(r"[^a-z0-9._-]+")
 ACTIVITIES = (
     "search", "general", "coding", "image_generation", "vision", "video",
     "communications", "custom", "image",
+    "documents", "video_analysis",
 )
 ACTIVITY_LABELS = (
     "Web search",
@@ -27,10 +28,12 @@ ACTIVITY_LABELS = (
     "Coding",
     "Image generation worker — LLM + global image service",
     "Vision worker — explicit vision-capable LLM",
-    "Video",
+    "Video generation worker — LLM + global video service",
     "Communications",
     "Custom",
     "Legacy image worker (same as image generation)",
+    "Documents — document tools and skills",
+    "Video analysis — explicit video-understanding model",
 )
 ROUTER_MODES = ("marcel_router", "direct_provider", "custom_endpoint")
 # Launch scope: retain alternate connection code, but do not expose it in setup.
@@ -197,6 +200,7 @@ SUB_AGENT_CAPABILITIES = (
     ("Delegation — launch additional sub-agents", "delegation"),
     ("Scheduling — run recurring or delayed work", "cronjob"),
     ("Email — read and work through a configured mailbox", "marcel-email"),
+    ("Document skills — discover and read installed skills", "skills"),
 )
 ACTIVITY_CAPABILITY_DEFAULTS = {
     "search": {"web", "file", "memory"},
@@ -205,7 +209,9 @@ ACTIVITY_CAPABILITY_DEFAULTS = {
     "image": {"image_gen", "file"},
     "image_generation": {"image_gen", "file"},
     "vision": {"vision", "file"},
-    "video": {"video", "video_gen", "vision", "file"},
+    "video": {"video_gen", "file"},
+    "video_analysis": {"video", "vision", "file"},
+    "documents": {"file", "terminal", "skills", "memory"},
     "communications": {"web", "file", "memory", "tts", "marcel-email"},
     "custom": set(),
 }
@@ -534,6 +540,8 @@ def normalize_worker(worker: dict[str, Any]) -> dict[str, Any]:
             result[key] = str(value).strip()
     if _is_image_generation_activity(activity):
         result["image_service"] = "global"
+    elif activity == "video":
+        result["video_service"] = "global"
     for source_key, target_key in (("toolsets", "toolsets"), ("tools", "tools"),
                                    ("fallbacks", "fallback_models"), ("fallback_models", "fallback_models")):
         value = worker.get(source_key, [])
@@ -1114,10 +1122,15 @@ def _choose_model(
     provider: str = "",
 ) -> str:
     """Show a compact provider-grouped catalog while retaining a custom-ID escape hatch."""
-    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, chat_models, model_label
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, model_label
     live = LIVE_SETUP_CATALOG.get()
-    if live is not None and activity != "vision":
-        entries = chat_models(live)
+    if live is None:
+        live = live_models
+    if live is not None:
+        from marcel_cli.setup_activity_models import compatible_models, choose_activity_model
+        entries = compatible_models(live, activity)
+        if activity:
+            return choose_activity_model(setup, label, entries, activity, current)
         if not entries:
             raise ValueError("No available chat/tool model in the live catalog")
         values = [entry["id"] for entry in entries]
@@ -1633,10 +1646,13 @@ def _fallback_catalog(
     *, provider: str = "",
 ) -> list[tuple[str, str]]:
     """Return capability-relevant fallbacks, with broad text choices and no duplicates."""
-    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, chat_models, model_label
+    from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, model_label
     live = LIVE_SETUP_CATALOG.get()
-    if live is not None and activity != "vision":
-        return [(model_label(entry), entry["id"]) for entry in chat_models(live)]
+    if live is None:
+        live = live_models
+    if live is not None:
+        from marcel_cli.setup_activity_models import compatible_models
+        return [(model_label(entry), entry["id"]) for entry in compatible_models(live, activity)]
     activity_catalog = _catalog_for_activity(activity, live_models, provider=provider)
     source = activity_catalog if _is_image_generation_activity(activity) or activity in {"video", "vision"} else (
         *activity_catalog, *_catalog_for_activity("", live_models))
@@ -1988,7 +2004,9 @@ def _setup_marcel_impl(config: dict) -> None:
         "accounts": list(account_values),
     }
     handled_direct_providers: set[str] = set()
-    live_models: list[dict[str, Any]] = list(existing_live_models)
+    live_models: list[dict[str, Any]] | None = (
+        list(existing_live_models) if values["router_mode"] == "marcel_router" else None
+    )
     if values["router_mode"] == "direct_provider":
         provider = _choose_direct_provider(setup, values["direct_provider"])
         _, provider_id, key_env, base_url, api_mode = provider
@@ -2264,6 +2282,16 @@ def _setup_marcel_impl(config: dict) -> None:
     if not ROUTER_ONLY_ONBOARDING:
         _choose_image_provider(setup, config)
     _print_main_agent_summary(setup, values, config)
+    if ROUTER_ONLY_ONBOARDING:
+        from marcel_cli.setup_media_status import service_description
+        setup._info(
+            "Router media services (separate from reasoning/tool-use models):",
+            service_description(config, "image", router_only=True),
+            service_description(config, "video", router_only=True),
+            "Media generation is unavailable until a Router runtime adapter is integrated. "
+            "Changing a global service would affect every worker that uses it.",
+            None,
+        )
     setup._info(
         "Main agent configured:",
         f"- Identity: {values['agent_name']}",
@@ -2275,11 +2303,11 @@ def _setup_marcel_impl(config: dict) -> None:
         None,
     )
     from marcel_cli.setup_workers import configure_workers, print_worker_summary
-    configure_workers(setup, values, router_only=ROUTER_ONLY_ONBOARDING)
+    configure_workers(setup, values, router_only=ROUTER_ONLY_ONBOARDING, config=config)
     if values["router_mode"] == "direct_provider":
         _connect_required_direct_providers(setup, values, skip=handled_direct_providers)
     for worker in values["workers"]:
-        print_worker_summary(setup, worker)
+        print_worker_summary(setup, worker, config=config, router_only=ROUTER_ONLY_ONBOARDING)
     try:
         apply_marcel_config(config, values)
     except ValueError as exc:

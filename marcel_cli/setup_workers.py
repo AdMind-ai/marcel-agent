@@ -112,14 +112,19 @@ def choose_worker_limits(setup: Any) -> dict:
             setup.print_error(str(exc))
 
 
-def print_worker_summary(setup: Any, worker: dict) -> None:
+def print_worker_summary(setup: Any, worker: dict, *, config: dict | None = None,
+                         router_only: bool = False) -> None:
     from tools.delegate_worker_registry import _BUDGET_FIELDS
+    from marcel_cli.setup_media_status import media_kind, service_description
+    kind = media_kind(worker.get("activity", ""))
     budget = {field: worker[field] for field in _BUDGET_FIELDS if field in worker}
     budget.update(worker.get("budget") or {})
     setup._info(
         f"Sub-agent configured: {worker.get('name') or worker.get('id')}",
         f"- Activity: {worker.get('activity', 'general')}",
-        f"- Model: {worker.get('model') or 'automatic'}",
+        f"- {'Reasoning/tool-use model' if kind else 'Model'}: {worker.get('model') or 'automatic'}",
+        service_description(config or {}, kind, router_only=router_only) if kind else "",
+        "Global service changes affect every worker that uses the service." if kind else "",
         f"- Fallback order: {', '.join(worker.get('fallbacks') or worker.get('fallback_models') or []) or 'none'}",
         f"- Concurrency: {worker.get('max_concurrency') or worker.get('concurrency') or 'global limit'}",
         f"- Permissions: {worker.get('permissions', 'inherit')}",
@@ -136,11 +141,14 @@ def print_worker_summary(setup: Any, worker: dict) -> None:
             setup._info(model_label(entry), None)
 
 
-def configure_workers(setup: Any, values: dict, *, router_only: bool = False) -> None:
+def configure_workers(setup: Any, values: dict, *, router_only: bool = False,
+                      config: dict | None = None) -> None:
     from marcel_cli.setup_marcel import (
         ACTIVITIES, ACTIVITY_LABELS, _choose_model, _choose_fallback_models, _choose_capabilities,
         _choose_concurrency, normalize_worker,
     )
+    from marcel_cli.setup_media_status import media_worker_ready
+    config = config if config is not None else {}
     while setup.prompt_yes_no("Add a sub-agent?", default=False):
         mode = setup.prompt_choice(
             "Sub-agent configuration", ["Configure manually", "Import YAML/JSON worker template"], 0,
@@ -150,8 +158,13 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False) ->
                 imported = import_worker_template(
                     setup.prompt("Worker template path"), values["workers"],
                 )
+                if not all(media_worker_ready(
+                    setup, worker.get("activity", ""), config, router_only=router_only,
+                ) for worker in imported):
+                    setup.print_error("Worker template was not imported; no workers were changed.")
+                    continue
                 for worker in imported:
-                    print_worker_summary(setup, worker)
+                    print_worker_summary(setup, worker, config=config, router_only=router_only)
                 if setup.prompt_yes_no("Import these workers?", True):
                     values["workers"].extend(imported)
             except (OSError, ValueError):
@@ -159,19 +172,30 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False) ->
             continue
         worker = {"name": setup.prompt("Sub-agent name")}
         worker["activity"] = ACTIVITIES[setup.prompt_choice("Sub-agent activity", list(ACTIVITY_LABELS), 1)]
+        if not media_worker_ready(setup, worker["activity"], config, router_only=router_only):
+            continue
+        setup._info({
+            "search": "Research worker: search and source-reading tools; access depends on the configured search backend.",
+            "coding": "Coding worker: development tools; only executable chat/tool models are eligible.",
+            "documents": "Documents worker: file, terminal and installed-skill tools; document engines must be installed separately.",
+            "vision": "Vision worker: explicit image-understanding capability is required.",
+            "video_analysis": "Video analysis worker: explicit video-understanding capability; this does not generate videos.",
+        }.get(worker["activity"], "Worker LLM: reasoning and tool use, not a media generator."), None)
         try:
             worker["model"] = _choose_model(
                 setup, f"Sub-agent model for {worker['activity']}",
                 allow_automatic=True, activity=worker["activity"],
-                live_models=values.get("live_model_entries"),
+                live_models=values.get("live_model_entries") if values["router_mode"] == "marcel_router" else None,
                 provider=values.get("direct_provider", "") if values["router_mode"] == "direct_provider" else "",
             )
         except ValueError as exc:
             setup.print_error(str(exc))
             continue
+        if not worker["model"] and values["router_mode"] == "marcel_router":
+            continue
         worker["fallbacks"] = _choose_fallback_models(
             setup, worker["activity"], worker["model"],
-            live_models=values.get("live_model_entries"),
+            live_models=values.get("live_model_entries") if values["router_mode"] == "marcel_router" else None,
             provider=values.get("direct_provider", "") if values["router_mode"] == "direct_provider" else "",
         )
         if not router_only and worker["activity"] == "search" and not values.get("search_provider_configured"):
@@ -208,7 +232,7 @@ def configure_workers(setup: Any, values: dict, *, router_only: bool = False) ->
                 raise WorkerConfigError("Worker name already exists")
             from marcel_cli.setup_model_labels import LIVE_SETUP_CATALOG, validate_worker_models
             validate_worker_models([normalized], LIVE_SETUP_CATALOG.get())
-            print_worker_summary(setup, worker)
+            print_worker_summary(setup, worker, config=config, router_only=router_only)
             values["workers"].append(worker)
         except ValueError as exc:
             setup.print_error(str(exc))
