@@ -755,15 +755,35 @@ class TestImageApiSurface:
         assert result["error_type"] == "auth_error"
         assert "_retryable" not in result
 
-    def test_catalog_models_are_offered_only_by_openrouter(self):
+    def test_offline_catalog_models_are_offered_only_by_openrouter(self):
         from plugins.image_gen.openrouter import _IMAGE_API_MODELS, _build_providers
 
         by_name = {p.name: p for p in _build_providers()}
-        openrouter_ids = {m["id"] for m in by_name["openrouter"].list_models()}
-        nous_ids = {m["id"] for m in by_name["nous"].list_models()}
+        with patch(
+            "plugins.image_gen.openrouter.OpenRouterCompatImageProvider._cached_catalog",
+            return_value=[],
+        ):
+            openrouter_ids = {m["id"] for m in by_name["openrouter"].list_models()}
+            nous_ids = {m["id"] for m in by_name["nous"].list_models()}
         assert "openai/gpt-image-2" in openrouter_ids
         assert set(_IMAGE_API_MODELS) <= openrouter_ids
         assert not (set(_IMAGE_API_MODELS) & nous_ids)
+
+    def test_live_catalog_is_not_padded_with_offline_models(self):
+        with patch(
+            "plugins.image_gen.openrouter.OpenRouterCompatImageProvider._image_api_live_models",
+            return_value=[{
+                "id": "test/new-image-model",
+                "display": "New image model",
+                "strengths": "From live discovery",
+            }],
+        ), patch(
+            "plugins.image_gen.openrouter.OpenRouterCompatImageProvider._live_models",
+            return_value=[],
+        ):
+            models = _openrouter_image_api().list_models()
+
+        assert {model["id"] for model in models} == {"test/new-image-model"}
 
     def test_default_model_is_unchanged_by_the_new_surface(self):
         from plugins.image_gen.openrouter import DEFAULT_MODEL
