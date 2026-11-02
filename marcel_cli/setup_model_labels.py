@@ -42,9 +42,19 @@ def capabilities(entry: dict) -> dict[str, bool]:
     for layer in layers:
         declared = layer.get("capabilities")
         if isinstance(declared, dict):
-            for role in ("chat", "tools"):
+            for role in ("chat", "tools", "vision", "video_analysis"):
                 if declared.get(role) is False:
                     result[role] = False
+    for role, flags in (
+        ("vision", ("supports_vision", "supports_image_analysis")),
+        ("video_analysis", ("supports_video_analysis",)),
+    ):
+        if any(layer.get(flag) is False for layer in layers for flag in flags):
+            result[role] = False
+        elif any(layer.get(flag) is True for layer in layers for flag in flags):
+            result.setdefault(role, True)
+    if result.get("video") is True or result.get("video-analysis") is True:
+        result.setdefault("video_analysis", True)
     return result
 
 
@@ -124,8 +134,10 @@ def validate_worker_models(workers: list[dict], catalog: list | None) -> None:
             if any(model in generators or str(model or "").startswith("fal-ai/") for model in models):
                 raise ValueError("Image/video generation backends cannot be worker chat models")
         return  # Direct/custom endpoints permit operator-provided IDs.
-    available = {entry["id"] for entry in chat_models(catalog)}
+    from marcel_cli.setup_activity_models import compatible_models
     for worker in workers:
+        available = {entry["id"] for entry in compatible_models(catalog, worker.get("activity", ""))}
         models = [worker.get("model")] + list(worker.get("fallbacks") or worker.get("fallback_models") or [])
         if any(model and model not in available for model in models):
-            raise ValueError("Worker model/fallback is not an available chat/tool model in this account's catalog")
+            raise ValueError("Worker model/fallback is not an available chat/tool model "
+                             "with the required activity capabilities in this account's catalog")

@@ -29,13 +29,15 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     :mod:`agent.web_search_registry`): an explicitly configured provider is returned
     even if ``is_available()`` is False, so the dispatcher surfaces a precise
     "X_API_KEY is not set" error instead of silently switching backends; only the
-    unconfigured fallback path is filtered by availability."""
+    unconfigured fallback path is filtered by availability. A configured but
+    unregistered provider fails closed instead of selecting a different backend."""
     configured = configured_provider_name("image_gen", logger)
     snapshot = _registry.merged()
     if configured:
         if snapshot.get(configured) is not None:
             return snapshot[configured]
-        logger.debug("image_gen.provider='%s' configured but not registered; falling back", configured)
+        logger.debug("image_gen.provider='%s' configured but not registered; failing closed", configured)
+        return None
 
     def _available(p: ImageGenProvider) -> bool:
         return is_available_safe(p, logger, "image_gen provider %s.is_available() raised %s")

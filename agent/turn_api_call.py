@@ -85,6 +85,10 @@ def perform_api_call(
                 next_api_kwargs, allow_stream=False, is_github_responses=agent._is_copilot_url(),
                 sanitize_harmony_tokens=agent._is_codex_backend(),
             )
+        # Last boundary: execution middleware/hooks can change the builder's
+        # payload. Validate and trace what is actually handed to the SDK.
+        from agent.router_output_budget import enforce_router_output_budget
+        next_api_kwargs = enforce_router_output_budget(agent, next_api_kwargs, final=True)
         if _use_streaming:
             return agent._interruptible_streaming_api_call(
                 next_api_kwargs, on_first_delta=_stop_spinner
@@ -138,6 +142,9 @@ def perform_api_call(
                 bool(agent._pending_redirect) if _redirect_lock is not None
                 else agent._has_pending_redirect()
             )
+    if response is not None:
+        from agent.router_output_budget import record_router_result
+        record_router_result(agent, response=response)
     if _redirect_crossed_response:
         # Response and redirect can cross threads: discard the now-stale
         # response and rebuild from the correction rather than lose it.

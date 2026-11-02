@@ -59,6 +59,8 @@ def handle_api_error(
     the retry loop with ``restart_with_rebuilt_messages`` armed (``"break"``) so the pre-API
     preflight re-runs against the fallback's context window (#84733)."""
     _provider_overflow_recovery_pending = False
+    from agent.router_output_budget import record_router_result
+    record_router_result(agent, error=api_error)
 
     def _verdict(action: str, result: Optional[Dict[str, Any]] = None) -> ApiErrorVerdict:
         return ApiErrorVerdict(

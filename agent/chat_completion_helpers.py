@@ -1530,8 +1530,11 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     OpenCode models). No-op for every other provider.
     """
     from agent.opencode_affinity import merge_opencode_session_headers
+    from agent.router_output_budget import enforce_router_output_budget
 
-    kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
+    kwargs = enforce_router_output_budget(
+        agent, _build_api_kwargs_for_mode(agent, api_messages, tools_for_api),
+    )
     return merge_opencode_session_headers(
         kwargs,
         getattr(agent, "provider", None),

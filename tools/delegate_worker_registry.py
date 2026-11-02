@@ -37,7 +37,7 @@ _FIELDS = frozenset({
     "activity", "role", "provider", "model", "tools", "toolsets",
     "max_concurrency", "max_iterations", "timeout_seconds", "fallback_models",
     "budget", *_BUDGET_FIELDS,
-    "permissions", "image_service",
+    "permissions", "image_service", "video_service",
 })
 
 
@@ -118,9 +118,9 @@ def _validate_values(raw: Mapping[str, Any], *, worker_id: Optional[str] = None)
     for key, value in raw.items():
         if key == "id":
             continue
-        if key == "image_service":
+        if key in {"image_service", "video_service"}:
             if value != "global":
-                raise WorkerConfigError("image_service must be 'global'")
+                raise WorkerConfigError(f"{key} must be 'global'")
             result[key] = value
         elif key in {"activity", "provider", "model"}:
             result[key] = _string(value, key)
