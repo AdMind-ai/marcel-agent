@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'emscripten'",
@@ -10,101 +10,101 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-23T16:46:35.749553193Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P14D"
 
 [options.exclude-newer-package]
-elevenlabs = "2099-01-01T00:00:00Z"
-setuptools = "2099-01-01T00:00:00Z"
-modal = "2099-01-01T00:00:00Z"
-pyyaml = "2099-01-01T00:00:00Z"
-numpy = "2099-01-01T00:00:00Z"
-pvporcupine = "2099-01-01T00:00:00Z"
-starlette = "2099-01-01T00:00:00Z"
-google-auth = "2099-01-01T00:00:00Z"
-aiohttp = "2099-01-01T00:00:00Z"
-mistralai = "2099-01-01T00:00:00Z"
-firecrawl-py = "2099-01-01T00:00:00Z"
-parallel-web = "2099-01-01T00:00:00Z"
-markdown = "2099-01-01T00:00:00Z"
-opentelemetry-sdk = "2099-01-01T00:00:00Z"
-prompt-toolkit = "2099-01-01T00:00:00Z"
-fastapi = "2099-01-01T00:00:00Z"
-anthropic = "2099-01-01T00:00:00Z"
-pathspec = "2099-01-01T00:00:00Z"
-openwakeword = "2099-01-01T00:00:00Z"
-defusedxml = "2099-01-01T00:00:00Z"
-ruff = "2099-01-01T00:00:00Z"
-exa-py = "2099-01-01T00:00:00Z"
-mcp = "2099-01-01T00:00:00Z"
-websockets = "2099-01-01T00:00:00Z"
-wheel = "2099-01-01T00:00:00Z"
-pytest = "2099-01-01T00:00:00Z"
-pillow = "2099-01-01T00:00:00Z"
-tenacity = "2099-01-01T00:00:00Z"
-pyjwt = "2099-01-01T00:00:00Z"
-slack-bolt = "2099-01-01T00:00:00Z"
-fal-client = "2099-01-01T00:00:00Z"
-asyncpg = "2099-01-01T00:00:00Z"
-boto3 = "2099-01-01T00:00:00Z"
-ruamel-yaml = "2099-01-01T00:00:00Z"
-sherpa-onnx = "2099-01-01T00:00:00Z"
-pytest-asyncio = "2099-01-01T00:00:00Z"
-slack-sdk = "2099-01-01T00:00:00Z"
-discord-py = "2099-01-01T00:00:00Z"
-honcho-ai = "2099-01-01T00:00:00Z"
-faster-whisper = "2099-01-01T00:00:00Z"
-packaging = "2099-01-01T00:00:00Z"
-certifi = "2099-01-01T00:00:00Z"
-debugpy = "2099-01-01T00:00:00Z"
-rich = "2099-01-01T00:00:00Z"
-supermemory = "2099-01-01T00:00:00Z"
-youtube-transcript-api = "2099-01-01T00:00:00Z"
-edge-tts = "2099-01-01T00:00:00Z"
-microsoft-teams-apps = "2099-01-01T00:00:00Z"
-aiohttp-socks = "2099-01-01T00:00:00Z"
+agent-client-protocol = "2099-01-01T00:00:00Z"
 ai-edge-litert = "2099-01-01T00:00:00Z"
-onnxruntime = "2099-01-01T00:00:00Z"
-croniter = "2099-01-01T00:00:00Z"
-opentelemetry-exporter-otlp-proto-http = "2099-01-01T00:00:00Z"
-azure-identity = "2099-01-01T00:00:00Z"
-lark-oapi = "2099-01-01T00:00:00Z"
-sentencepiece = "2099-01-01T00:00:00Z"
-qrcode = "2099-01-01T00:00:00Z"
-google-api-python-client = "2099-01-01T00:00:00Z"
-brotlicffi = "2099-01-01T00:00:00Z"
-mem0ai = "2099-01-01T00:00:00Z"
-vercel = "2099-01-01T00:00:00Z"
+aiohttp = "2099-01-01T00:00:00Z"
+aiohttp-socks = "2099-01-01T00:00:00Z"
 aiosqlite = "2099-01-01T00:00:00Z"
-tzdata = "2099-01-01T00:00:00Z"
-python-dotenv = "2099-01-01T00:00:00Z"
+alibabacloud-dingtalk = "2099-01-01T00:00:00Z"
+anthropic = "2099-01-01T00:00:00Z"
+asyncpg = "2099-01-01T00:00:00Z"
+azure-identity = "2099-01-01T00:00:00Z"
+boto3 = "2099-01-01T00:00:00Z"
+brotlicffi = "2099-01-01T00:00:00Z"
+certifi = "2099-01-01T00:00:00Z"
+concurrent-log-handler = "2099-01-01T00:00:00Z"
+croniter = "2099-01-01T00:00:00Z"
+cryptography = "2099-01-01T00:00:00Z"
 daytona = "2099-01-01T00:00:00Z"
-uvicorn = "2099-01-01T00:00:00Z"
-requests = "2099-01-01T00:00:00Z"
+debugpy = "2099-01-01T00:00:00Z"
+defusedxml = "2099-01-01T00:00:00Z"
+dingtalk-stream = "2099-01-01T00:00:00Z"
+discord-py = "2099-01-01T00:00:00Z"
+edge-tts = "2099-01-01T00:00:00Z"
+elevenlabs = "2099-01-01T00:00:00Z"
+exa-py = "2099-01-01T00:00:00Z"
+fal-client = "2099-01-01T00:00:00Z"
+fastapi = "2099-01-01T00:00:00Z"
+faster-whisper = "2099-01-01T00:00:00Z"
+fire = "2099-01-01T00:00:00Z"
+firecrawl-py = "2099-01-01T00:00:00Z"
+google-api-python-client = "2099-01-01T00:00:00Z"
+google-auth = "2099-01-01T00:00:00Z"
+google-auth-httplib2 = "2099-01-01T00:00:00Z"
+google-auth-oauthlib = "2099-01-01T00:00:00Z"
+hindsight-client = "2099-01-01T00:00:00Z"
+honcho-ai = "2099-01-01T00:00:00Z"
 httplib2 = "2099-01-01T00:00:00Z"
 httpx = "2099-01-01T00:00:00Z"
-pyasn1 = "2099-01-01T00:00:00Z"
-snowballstemmer = "2099-01-01T00:00:00Z"
-concurrent-log-handler = "2099-01-01T00:00:00Z"
-cryptography = "2099-01-01T00:00:00Z"
-oauthlib = "2099-01-01T00:00:00Z"
-pydantic = "2099-01-01T00:00:00Z"
-agent-client-protocol = "2099-01-01T00:00:00Z"
-fire = "2099-01-01T00:00:00Z"
 httpx2 = "2099-01-01T00:00:00Z"
-google-auth-oauthlib = "2099-01-01T00:00:00Z"
-python-multipart = "2099-01-01T00:00:00Z"
-ty = "2099-01-01T00:00:00Z"
-openai = "2099-01-01T00:00:00Z"
-mautrix = "2099-01-01T00:00:00Z"
-google-auth-httplib2 = "2099-01-01T00:00:00Z"
-python-telegram-bot = "2099-01-01T00:00:00Z"
-psutil = "2099-01-01T00:00:00Z"
 jinja2 = "2099-01-01T00:00:00Z"
-hindsight-client = "2099-01-01T00:00:00Z"
+lark-oapi = "2099-01-01T00:00:00Z"
+markdown = "2099-01-01T00:00:00Z"
+mautrix = "2099-01-01T00:00:00Z"
+mcp = "2099-01-01T00:00:00Z"
+mem0ai = "2099-01-01T00:00:00Z"
+microsoft-teams-apps = "2099-01-01T00:00:00Z"
+mistralai = "2099-01-01T00:00:00Z"
+modal = "2099-01-01T00:00:00Z"
+numpy = "2099-01-01T00:00:00Z"
+oauthlib = "2099-01-01T00:00:00Z"
+onnxruntime = "2099-01-01T00:00:00Z"
+openai = "2099-01-01T00:00:00Z"
+opentelemetry-exporter-otlp-proto-http = "2099-01-01T00:00:00Z"
+opentelemetry-sdk = "2099-01-01T00:00:00Z"
+openwakeword = "2099-01-01T00:00:00Z"
+packaging = "2099-01-01T00:00:00Z"
+parallel-web = "2099-01-01T00:00:00Z"
+pathspec = "2099-01-01T00:00:00Z"
+pillow = "2099-01-01T00:00:00Z"
+prompt-toolkit = "2099-01-01T00:00:00Z"
+psutil = "2099-01-01T00:00:00Z"
+pvporcupine = "2099-01-01T00:00:00Z"
+pyasn1 = "2099-01-01T00:00:00Z"
+pydantic = "2099-01-01T00:00:00Z"
+pyjwt = "2099-01-01T00:00:00Z"
+pytest = "2099-01-01T00:00:00Z"
+pytest-asyncio = "2099-01-01T00:00:00Z"
+python-dotenv = "2099-01-01T00:00:00Z"
+python-multipart = "2099-01-01T00:00:00Z"
+python-telegram-bot = "2099-01-01T00:00:00Z"
+pyyaml = "2099-01-01T00:00:00Z"
+qrcode = "2099-01-01T00:00:00Z"
+requests = "2099-01-01T00:00:00Z"
+rich = "2099-01-01T00:00:00Z"
+ruamel-yaml = "2099-01-01T00:00:00Z"
+ruff = "2099-01-01T00:00:00Z"
+sentencepiece = "2099-01-01T00:00:00Z"
+setuptools = "2099-01-01T00:00:00Z"
+sherpa-onnx = "2099-01-01T00:00:00Z"
+slack-bolt = "2099-01-01T00:00:00Z"
+slack-sdk = "2099-01-01T00:00:00Z"
+snowballstemmer = "2099-01-01T00:00:00Z"
 sounddevice = "2099-01-01T00:00:00Z"
-alibabacloud-dingtalk = "2099-01-01T00:00:00Z"
-dingtalk-stream = "2099-01-01T00:00:00Z"
+starlette = "2099-01-01T00:00:00Z"
+supermemory = "2099-01-01T00:00:00Z"
+tenacity = "2099-01-01T00:00:00Z"
+ty = "2099-01-01T00:00:00Z"
+tzdata = "2099-01-01T00:00:00Z"
+uvicorn = "2099-01-01T00:00:00Z"
+vercel = "2099-01-01T00:00:00Z"
+websockets = "2099-01-01T00:00:00Z"
+wheel = "2099-01-01T00:00:00Z"
+youtube-transcript-api = "2099-01-01T00:00:00Z"
 
 [manifest]
 overrides = [
@@ -129,12 +129,12 @@ name = "ai-edge-litert"
 version = "2.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-strenum", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "flatbuffers", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "protobuf", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "tqdm", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "backports-strenum" },
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "protobuf" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/3d/41a85023e1c6cc76d895f3ba6ac7c22b0785db7e08d0827ebeb8a403eefc/ai_edge_litert-2.1.6-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:edf598814004e594b40c888f52cae59e950dbeffd821e83ba45d28db0a0aa3f5", size = 10031164, upload-time = "2026-07-01T21:42:50.986Z" },
@@ -860,7 +860,7 @@ name = "concurrent-log-handler"
 version = "0.9.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "portalocker", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "portalocker" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9c/2c/ba185acc438cff6b58cd8f8dec27e7f4fcabf6968a1facbb6d0cacbde7fe/concurrent_log_handler-0.9.29.tar.gz", hash = "sha256:bc37a76d3f384cbf4a98f693ebd770543edc0f4cd5c6ab6bc70e9e1d7d582265", size = 42114, upload-time = "2026-02-22T18:18:25.758Z" }
 wheels = [
@@ -1741,8 +1741,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -2384,7 +2384,7 @@ requires-dist = [
     { name = "psutil", specifier = "==7.2.2" },
     { name = "ptyprocess", marker = "sys_platform != 'win32'", specifier = ">=0.7.0,<1" },
     { name = "pvporcupine", marker = "extra == 'wake'", specifier = "==4.0.3" },
-    { name = "pyasn1", marker = "extra == 'google'", specifier = "==0.6.4" },
+    { name = "pyasn1", marker = "extra == 'google'", specifier = "==0.6.5" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "pyjwt", extras = ["crypto"], specifier = "==2.15.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
@@ -3449,11 +3449,11 @@ wheels = [
 
 [[package]]
 name = "pyasn1"
-version = "0.6.4"
+version = "0.6.5"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a4/9a/23310166d960def5897e91fe20e5b724601b02a22e84ba1f94232c0b7f67/pyasn1-0.6.4.tar.gz", hash = "sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81", size = 151262, upload-time = "2026-07-09T01:12:33.988Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/7e/3c0da41061a2021cac7cd524fd57092adbe5b515e8bf9005702e366802e2/pyasn1-0.6.5.tar.gz", hash = "sha256:6b11616a6bcf3a40e635f082bb232fa57b5e0dd7f517bd7ddd69ec3794508a47", size = 155152, upload-time = "2026-10-27T06:32:49.125Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/3b/6163796d69c3977d1e4287bea4a6979161cbbdd170ebb430511e8e1999ce/pyasn1-0.6.4-py3-none-any.whl", hash = "sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b", size = 84410, upload-time = "2026-07-09T01:12:32.92Z" },
+    { url = "https://files.pythonhosted.org/packages/19/1f/3eefd5c84c35cae44549ce1c7f7e58f7945b34f5a6bce07a135438522073/pyasn1-0.6.5-py3-none-any.whl", hash = "sha256:4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587", size = 84807, upload-time = "2026-10-27T06:32:48.045Z" },
 ]
 
 [[package]]
@@ -4141,7 +4141,7 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.12'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -4198,7 +4198,7 @@ resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version >= '3.12'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7e/74/66de6258867beb2ef08f35f9f2ac017a52cacd5081714d239ff1a442d458/scipy-1.18.1.tar.gz", hash = "sha256:52c4b7422442aba924d03ad4019852b08a92e64ea187b933135687bfe2747307", size = 30781235, upload-time = "2026-08-21T23:28:50.599Z" }
 wheels = [
@@ -4504,7 +4504,7 @@ name = "tflite-runtime"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "numpy" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/a6/02d68cb62cd221589a0ff055073251d883936237c9c990e34a1d7cecd06f/tflite_runtime-2.14.0-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:195ab752e7e57329a68e54dd3dd5439fad888b9bff1be0f0dc042a3237a90e4d", size = 2414486, upload-time = "2023-10-03T21:15:44.331Z" },
@@ -4848,11 +4848,11 @@ name = "vercel-workers"
 version = "0.0.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", marker = "python_full_version >= '3.12'" },
-    { name = "httpx", marker = "python_full_version >= '3.12'" },
-    { name = "pydantic", marker = "python_full_version >= '3.12'" },
-    { name = "python-dotenv", marker = "python_full_version >= '3.12'" },
-    { name = "vercel", marker = "python_full_version >= '3.12'" },
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "vercel" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/df/04d37021ad7ca53b7599c313e411d91623c7a005c741f491d1eefb7a9f0c/vercel_workers-0.0.25.tar.gz", hash = "sha256:212ded01400b524be51d251df49f801caf115ad7d48cca7eb168cbeceda3def3", size = 64149, upload-time = "2026-06-20T19:26:27.177Z" }
 wheels = [
